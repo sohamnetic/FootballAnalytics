@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual Environment
+venv/
+
+# VS Code
+.vscode/
+
+# Generated outputs
+outputs/
+
+# Python cache
+.pytest_cache/
+
+# Environment files
+.env
+
+# Windows
+Thumbs.db
