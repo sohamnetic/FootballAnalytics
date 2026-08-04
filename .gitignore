@@ -17,6 +17,6 @@ outputs/
 
 # Environment files
 .env
-
+chahnge.log
 # Windows
 Thumbs.db
