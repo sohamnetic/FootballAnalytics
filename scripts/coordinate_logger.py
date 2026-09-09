@@ -17,6 +17,7 @@ class CoordinateLogger:
         self.writer.writerow([
             "frame",
             "track_id",
+            "stable_id",
             "class",
             "confidence",
             "x1",
@@ -31,20 +32,29 @@ class CoordinateLogger:
         self,
         frame_number,
         track_id,
+        stable_id,
         cls_name,
         confidence,
         x1,
         y1,
         x2,
-        y2
+        y2,
+        bbox_center_x=None,
+        bbox_center_y=None,
     ):
 
         center_x = int((x1 + x2) / 2)
         center_y = int(y2)
 
+        if bbox_center_x is not None:
+            center_x = int(bbox_center_x)
+        if bbox_center_y is not None:
+            center_y = int(bbox_center_y)
+
         self.writer.writerow([
             frame_number,
-            track_id,
+            "" if track_id is None else track_id,
+            "" if stable_id is None else stable_id,
             cls_name,
             confidence,
             x1,

@@ -1,4 +1,5 @@
 from pathlib import Path
+import torch
 
 # ======================================================
 # PROJECT ROOT
@@ -39,11 +40,35 @@ COORDINATE_OUTPUT = OUTPUT_DIR / "coordinates"
 
 HEATMAP_OUTPUT = OUTPUT_DIR / "heatmaps"
 
+EVENTS_OUTPUT = OUTPUT_DIR / "events"
+
+# Phase 1 possession (pixel space; frames not seconds)
+MAX_BALL_INTERPOLATION_GAP = 15
+MAX_POSSESSION_DISTANCE_PX = 150
+POSSESSION_CONFIRM_FRAMES = 5
+
+# Ball-only YOLO predict (COCO sports ball). Does not affect player track().
+BALL_CLASS_ID = 32
+BALL_CLASS_NAME = "sports ball"
+BALL_CONFIDENCE = 0.10
+BALL_IMGSZ = 1280
+
 # ======================================================
 # TRACKER
 # ======================================================
 
 TRACKER_CONFIG = PROJECT_ROOT / "config" / "bytetrack.yaml"
+
+# ======================================================
+# DEVICE (CUDA if available, otherwise CPU)
+# ======================================================
+
+if torch.cuda.is_available():
+    DEVICE = 0
+    DEVICE_LABEL = "CUDA:0"
+else:
+    DEVICE = "cpu"
+    DEVICE_LABEL = "CPU"
 
 # ======================================================
 # CREATE MISSING FOLDERS
@@ -66,6 +91,8 @@ folders = [
     COORDINATE_OUTPUT,
 
     HEATMAP_OUTPUT,
+
+    EVENTS_OUTPUT,
 
 ]
 

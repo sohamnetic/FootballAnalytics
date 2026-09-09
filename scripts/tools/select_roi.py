@@ -2,11 +2,10 @@ import cv2
 import json
 import numpy as np
 
-from pathlib import Path
 from config.config import TEST_VIDEO, PROJECT_ROOT
 
 # =====================================================
-# Configuration
+# Paths
 # =====================================================
 
 ROI_FOLDER = PROJECT_ROOT / "data" / "roi"
@@ -15,102 +14,108 @@ ROI_FOLDER.mkdir(parents=True, exist_ok=True)
 ROI_FILE = ROI_FOLDER / "camera_001.json"
 
 # =====================================================
-# Global Variables
+# Globals
 # =====================================================
 
 points = []
-
 frame = None
-display = None
-
 
 # =====================================================
 # Mouse Callback
 # =====================================================
 
 def mouse_callback(event, x, y, flags, param):
+
     global points
 
-    # Left Click -> Add Point
+    # -------------------------
+    # Left Click
+    # -------------------------
     if event == cv2.EVENT_LBUTTONDOWN:
-        points.append([x, y])
 
-    # Right Click -> Remove Last Point
+        if len(points) < 4:
+
+            points.append([x, y])
+
+            print(f"Corner {len(points)} : ({x}, {y})")
+
+    # -------------------------
+    # Right Click
+    # -------------------------
     elif event == cv2.EVENT_RBUTTONDOWN:
-        if len(points) > 0:
-            points.pop()
 
+        if len(points):
+
+            removed = points.pop()
+
+            print(f"Removed : {removed}")
 
 # =====================================================
-# Draw Everything
+# Draw
 # =====================================================
 
 def draw():
 
     canvas = frame.copy()
 
-    # Draw filled polygon
-    if len(points) >= 3:
-
-        overlay = canvas.copy()
-
-        pts = np.array(points, dtype=np.int32)
-
-        cv2.fillPoly(
-            overlay,
-            [pts],
-            (255, 0, 0)
-        )
-
-        alpha = 0.25
-
-        canvas = cv2.addWeighted(
-            overlay,
-            alpha,
-            canvas,
-            1 - alpha,
-            0
-        )
-
-    # Draw polygon lines
+    # Draw polygon only after 2 points
     if len(points) >= 2:
 
-        pts = np.array(points, dtype=np.int32)
+        pts = np.array(points, np.int32)
+
+        closed = len(points) == 4
 
         cv2.polylines(
             canvas,
             [pts],
-            False,
-            (0, 255, 0),
+            closed,
+            (0,255,0),
             2
         )
 
-    # Draw Points + Numbers
+    # Draw points
     for i, p in enumerate(points):
 
         cv2.circle(
             canvas,
             tuple(p),
-            6,
-            (0, 0, 255),
+            7,
+            (0,0,255),
             -1
         )
 
         cv2.putText(
             canvas,
-            str(i + 1),
-            (p[0] + 10, p[1] - 10),
+            str(i+1),
+            (p[0]+12,p[1]-12),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
+            0.7,
+            (255,255,255),
             2
         )
 
     instructions = [
-        "Left Click : Add Point",
+
+        "Select ONLY 4 pitch corners",
+
+        "1 Top Left",
+
+        "2 Top Right",
+
+        "3 Bottom Right",
+
+        "4 Bottom Left",
+
+        "",
+
+        "Left Click : Add",
+
         "Right Click : Undo",
-        "S : Save",
+
         "R : Reset",
+
+        "S : Save",
+
         "Q : Quit"
     ]
 
@@ -119,19 +124,26 @@ def draw():
     for text in instructions:
 
         cv2.putText(
+
             canvas,
+
             text,
-            (20, y),
+
+            (20,y),
+
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
+
+            0.65,
+
             (255,255,255),
+
             2
+
         )
 
-        y += 30
+        y += 28
 
     return canvas
-
 
 # =====================================================
 # Main
@@ -148,8 +160,20 @@ def main():
     cap.release()
 
     if not ret:
-        print("Unable to open video.")
+
+        print("Cannot read video.")
+
         return
+
+    print("="*60)
+    print("Select the FOUR OUTER corners of the football pitch")
+    print()
+    print("Order:")
+    print("1 -> Top Left")
+    print("2 -> Top Right")
+    print("3 -> Bottom Right")
+    print("4 -> Bottom Left")
+    print("="*60)
 
     cv2.namedWindow("ROI Selector")
 
@@ -170,40 +194,52 @@ def main():
         key = cv2.waitKey(20) & 0xFF
 
         if key == ord("q"):
+
             break
 
         elif key == ord("r"):
+
             points.clear()
+
+            print("Reset.")
 
         elif key == ord("s"):
 
-            if len(points) < 3:
-                print("Select at least 3 points.")
+            if len(points) != 4:
+
+                print("Please select EXACTLY 4 corners.")
+
                 continue
 
-            roi_data = {
-                "camera_name": "camera_001",
-                "video_resolution": [
+            roi = {
+
+                "camera_name":"camera_001",
+
+                "video_resolution":[
                     frame.shape[1],
                     frame.shape[0]
                 ],
-                "polygon": points
+
+                "corners":points
+
             }
 
-            with open(ROI_FILE, "w") as f:
+            with open(ROI_FILE,"w") as f:
+
                 json.dump(
-                    roi_data,
+                    roi,
                     f,
                     indent=4
                 )
 
             print("\nROI Saved Successfully!")
+
             print(ROI_FILE)
 
             break
 
     cv2.destroyAllWindows()
 
-
 if __name__ == "__main__":
+
     main()
