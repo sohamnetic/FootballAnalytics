@@ -66,3 +66,17 @@ class JerseyColorExtractor:
             int(g),
             int(r)
         )
+
+    @staticmethod
+    def bgr_to_hsv(bgr):
+        """Convert a BGR tuple to OpenCV HSV (H 0-180, S/V 0-255)."""
+        pixel = np.uint8([[list(bgr)]])
+        hsv = cv2.cvtColor(pixel, cv2.COLOR_BGR2HSV)[0, 0]
+        return (int(hsv[0]), int(hsv[1]), int(hsv[2]))
+
+    @staticmethod
+    def bgr_to_lab(bgr):
+        """Convert a BGR tuple to OpenCV Lab. Reserved for later clustering."""
+        pixel = np.uint8([[list(bgr)]])
+        lab = cv2.cvtColor(pixel, cv2.COLOR_BGR2LAB)[0, 0]
+        return (int(lab[0]), int(lab[1]), int(lab[2]))

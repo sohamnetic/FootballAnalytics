@@ -19,14 +19,21 @@ from config.config import (
     COORDINATE_OUTPUT,
     EVENTS_OUTPUT,
     HEATMAP_OUTPUT,
+    IDENTITY_OUTPUT,
     OUTPUT_DIR,
+    TEAM_OUTPUT,
     TEST_VIDEO,
 )
 
+from scripts.analytics.events.passes import run_pass_detection
 from scripts.analytics.events.possession import run_possession
+from scripts.analytics.events.shots import run_shot_detection
+from scripts.analytics.events.turnovers import run_turnover_detection
+from scripts.analytics.match_stats import run_match_stats
 from scripts.analytics.heatmap import HeatmapEngine
 from scripts.analytics.motion_engine import MotionEngine
 from scripts.track import run_tracking
+from scripts.vision.team_assigner import run_team_assignment
 
 ANALYTICS_DIR = OUTPUT_DIR / "analytics"
 ANALYTICS_CSV = ANALYTICS_DIR / "player_analytics.csv"
@@ -66,6 +73,9 @@ def segment_output_paths(start_time=0, duration=None):
             "frame_state_csv": EVENTS_OUTPUT / "frame_state.csv",
             "possession_video": EVENTS_OUTPUT / "possession_validation.mp4",
             "tracking_name": "match_tracking",
+            "teams_csv": TEAM_OUTPUT / "player_teams.csv",
+            "teams_overlay": TEAM_OUTPUT / "team_validation.mp4",
+            "passes_suffix": "",
         }
     return {
         "analytics_csv": ANALYTICS_DIR / f"player_analytics_{suffix}.csv",
@@ -73,6 +83,9 @@ def segment_output_paths(start_time=0, duration=None):
         "frame_state_csv": EVENTS_OUTPUT / f"frame_state_{suffix}.csv",
         "possession_video": EVENTS_OUTPUT / f"possession_validation_{suffix}.mp4",
         "tracking_name": f"match_tracking_{suffix}",
+        "teams_csv": TEAM_OUTPUT / f"player_teams_{suffix}.csv",
+        "teams_overlay": TEAM_OUTPUT / f"team_validation_{suffix}.mp4",
+        "passes_suffix": suffix,
     }
 
 
@@ -239,6 +252,11 @@ def run_mvp(
     force_track: bool,
     max_frames=None,
     skip_events: bool = False,
+    skip_teams: bool = False,
+    skip_passes: bool = False,
+    skip_turnovers: bool = False,
+    skip_shots: bool = False,
+    skip_match_stats: bool = False,
     start_time=0,
     duration=None,
 ):
@@ -282,6 +300,69 @@ def run_mvp(
             validation_video=paths["possession_video"],
         )
 
+    team_result = None
+    if not skip_teams:
+        print("Running team assignment (jersey colour, no YOLO)...")
+        team_result = run_team_assignment(
+            csv_path,
+            video_path,
+            output_csv=paths["teams_csv"],
+            write_overlay=True,
+        )
+
+    pass_result = None
+    frame_state_csv = paths["frame_state_csv"]
+    teams_csv = paths["teams_csv"]
+    if Path(teams_csv).exists() is False and (TEAM_OUTPUT / "player_teams.csv").exists():
+        teams_csv = TEAM_OUTPUT / "player_teams.csv"
+    if not skip_passes and Path(frame_state_csv).exists() and Path(teams_csv).exists():
+        print("Running pass detection (post-process, no YOLO)...")
+        pass_result = run_pass_detection(
+            frame_state_csv,
+            teams_csv,
+            video_path,
+            suffix=paths.get("passes_suffix", ""),
+        )
+
+    turnover_result = None
+    if not skip_turnovers and Path(frame_state_csv).exists() and Path(teams_csv).exists():
+        print("Running interceptions/recoveries (post-process, no YOLO)...")
+        turnover_result = run_turnover_detection(
+            frame_state_csv,
+            teams_csv,
+            video_path,
+            suffix=paths.get("passes_suffix", ""),
+        )
+
+    shot_result = None
+    if not skip_shots and Path(frame_state_csv).exists() and Path(teams_csv).exists():
+        print("Running shot/on-target/goal detection (post-process, no YOLO)...")
+        shot_result = run_shot_detection(
+            frame_state_csv,
+            teams_csv,
+            video_path,
+            suffix=paths.get("passes_suffix", ""),
+        )
+
+    match_stats_result = None
+    suffix = paths.get("passes_suffix", "")
+    tag = f"_{suffix}" if suffix else ""
+    if not skip_match_stats and Path(frame_state_csv).exists() and Path(teams_csv).exists():
+        print("Building match stats (product data layer, no YOLO)...")
+        match_stats_result = run_match_stats(
+            frame_state_csv=frame_state_csv,
+            teams_csv=teams_csv,
+            passes_csv=EVENTS_OUTPUT / f"passes{tag}.csv",
+            interceptions_csv=EVENTS_OUTPUT / f"interceptions{tag}.csv",
+            recoveries_csv=EVENTS_OUTPUT / f"recoveries{tag}.csv",
+            shots_csv=EVENTS_OUTPUT / f"shots{tag}.csv",
+            video_path=video_path,
+            suffix=suffix,
+            start_time_s=start_time,
+            duration_s=duration,
+            identity_audit_csv=IDENTITY_OUTPUT / "identity_audit.csv",
+        )
+
     print("\n" + "=" * 60)
     print("MVP pipeline finished")
     print("=" * 60)
@@ -297,6 +378,22 @@ def run_mvp(
         print(f"Frame state CSV    : {possession_result['csv']}")
         if possession_result.get("video"):
             print(f"Possession video   : {possession_result['video']}")
+    if team_result:
+        print(f"Player teams CSV   : {team_result['csv']}")
+        if team_result.get("overlay"):
+            print(f"Team overlay       : {team_result['overlay']}")
+    if pass_result:
+        print(f"Passes CSV         : {pass_result['passes_csv']}")
+        print(f"Pass validation    : {pass_result['validation_csv']}")
+    if turnover_result:
+        print(f"Interceptions CSV  : {turnover_result['interceptions_csv']}")
+        print(f"Recoveries CSV     : {turnover_result['recoveries_csv']}")
+    if shot_result:
+        print(f"Shots CSV          : {shot_result['shots_csv']}")
+        print(f"Shot validation    : {shot_result['validation_csv']}")
+    if match_stats_result:
+        print(f"Match stats JSON   : {match_stats_result['json']}")
+        print(f"Match stats CSV    : {match_stats_result['csv']}")
     print("=" * 60)
 
     return {
@@ -307,6 +404,11 @@ def run_mvp(
         "rows": rows,
         "identity_column": identity_column,
         "possession": possession_result,
+        "teams": team_result,
+        "passes": pass_result,
+        "turnovers": turnover_result,
+        "shots": shot_result,
+        "match_stats": match_stats_result,
     }
 
 
@@ -343,6 +445,31 @@ def parse_args():
         help="Skip Phase 1 possession processing",
     )
     parser.add_argument(
+        "--skip-teams",
+        action="store_true",
+        help="Skip jersey-colour team assignment",
+    )
+    parser.add_argument(
+        "--skip-passes",
+        action="store_true",
+        help="Skip pass detection post-process",
+    )
+    parser.add_argument(
+        "--skip-turnovers",
+        action="store_true",
+        help="Skip interception/recovery post-process",
+    )
+    parser.add_argument(
+        "--skip-shots",
+        action="store_true",
+        help="Skip shot/on-target/goal post-process",
+    )
+    parser.add_argument(
+        "--skip-match-stats",
+        action="store_true",
+        help="Skip unified match stats aggregation",
+    )
+    parser.add_argument(
         "--start-time",
         type=float,
         default=0,
@@ -374,6 +501,11 @@ def main():
         force_track=args.force_track,
         max_frames=args.max_frames,
         skip_events=args.skip_events,
+        skip_teams=args.skip_teams,
+        skip_passes=args.skip_passes,
+        skip_turnovers=args.skip_turnovers,
+        skip_shots=args.skip_shots,
+        skip_match_stats=args.skip_match_stats,
         start_time=args.start_time,
         duration=args.duration,
     )

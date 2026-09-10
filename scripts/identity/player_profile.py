@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -29,6 +29,7 @@ class PlayerProfile:
     # Running average player height (pixels)
     average_height: float = 0.0
 
-    # Future features
-    jersey_color = None
+    # Running average upper-body jersey colour (BGR). Soft appearance signal only.
+    jersey_color: Optional[Tuple[int, int, int]] = None
+
     appearance_embedding = None

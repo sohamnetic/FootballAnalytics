@@ -17,6 +17,7 @@ from config.config import (
     BALL_CLASS_NAME,
     BALL_CONFIDENCE,
     BALL_IMGSZ,
+    IDENTITY_OUTPUT,
 )
 
 from scripts.coordinate_logger import CoordinateLogger
@@ -212,7 +213,8 @@ def run_tracking(
                     track_id,
                     original_frame,
                     position,
-                    (x1, y1, x2, y2)
+                    (x1, y1, x2, y2),
+                    frame=frame,
                 )
 
                 logger.log(
@@ -298,6 +300,10 @@ def run_tracking(
     writer.release()
     logger.close()
 
+    rematch_audit = identity_manager.write_rematch_audit(
+        IDENTITY_OUTPUT / "rematch_audit.csv"
+    )
+
     end = time.time()
 
     print("\n" + "=" * 60)
@@ -327,6 +333,9 @@ def run_tracking(
 
     print("\nCoordinate File:")
     print(coordinate_output)
+
+    if rematch_audit:
+        print(f"Rematch audit        : {rematch_audit}")
 
     return coordinate_output
 

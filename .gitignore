@@ -17,6 +17,14 @@ outputs/
 
 # Environment files
 .env
-c
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Product runtime
+data/uploads/
+data/matches_index.json
+
 # Windows
 Thumbs.db
