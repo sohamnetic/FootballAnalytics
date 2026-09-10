@@ -11,14 +11,16 @@ import re
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from app.auth import authenticate, create_user, issue_token, parse_token
 from app.jobs import enqueue, start_worker
 from app.store import (
     UPLOADS_DIR,
+    delete_match,
     ensure_dirs,
     get_match,
     list_matches,
@@ -40,7 +42,12 @@ MATCH_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 app = FastAPI(title="Football Analytics", version="mvp-product")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -54,6 +61,27 @@ class AnalyzeBody(BaseModel):
     analysis: str = Field(default="full")  # full | window
     start_time_s: float | None = None
     duration_s: float | None = None
+
+
+class AuthBody(BaseModel):
+    email: str = Field(min_length=3, max_length=120)
+    password: str = Field(min_length=6, max_length=120)
+    name: str = Field(default="", max_length=80)
+
+
+def current_user(authorization: str | None = Header(default=None)) -> dict:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Please sign in")
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        return parse_token(token)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Please sign in again") from exc
+
+
+def _owns_match(row: dict, user: dict) -> bool:
+    owner = row.get("user_id")
+    return owner in (None, "", user["id"])
 
 
 def _valid_id(match_id: str) -> str:
@@ -83,8 +111,31 @@ def health():
     return {"ok": True}
 
 
+@app.post("/api/auth/signup")
+def signup(body: AuthBody):
+    try:
+        user = create_user(body.email, body.password, body.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"user": user, "token": issue_token(user)}
+
+
+@app.post("/api/auth/login")
+def login(body: AuthBody):
+    try:
+        user = authenticate(body.email, body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return {"user": user, "token": issue_token(user)}
+
+
+@app.get("/api/auth/me")
+def me(user: dict = Depends(current_user)):
+    return {"user": user}
+
+
 @app.post("/api/matches/upload")
-async def upload_match(file: UploadFile = File(...)):
+async def upload_match(file: UploadFile = File(...), user: dict = Depends(current_user)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
     filename = _safe_filename(file.filename)
@@ -132,6 +183,7 @@ async def upload_match(file: UploadFile = File(...)):
         "duration_s": None,
         "created_at": now_iso(),
         "error": None,
+        "user_id": user["id"],
     })
     return {
         "match_id": match_id,
@@ -143,23 +195,40 @@ async def upload_match(file: UploadFile = File(...)):
 
 
 @app.get("/api/matches")
-def matches():
-    return {"matches": list_matches()}
+def matches(user: dict = Depends(current_user)):
+    return {"matches": list_matches(user["id"])}
 
 
 @app.get("/api/matches/{match_id}")
-def match_detail(match_id: str):
+def match_detail(match_id: str, user: dict = Depends(current_user)):
     row = get_match(_valid_id(match_id))
     if not row:
         raise HTTPException(status_code=404, detail="Match not found")
+    if not _owns_match(row, user):
+        raise HTTPException(status_code=403, detail="Not allowed")
     return row
 
 
-@app.post("/api/matches/{match_id}/analyze")
-def analyze(match_id: str, body: AnalyzeBody):
+@app.delete("/api/matches/{match_id}")
+def remove_match(match_id: str, user: dict = Depends(current_user)):
     row = get_match(_valid_id(match_id))
     if not row:
         raise HTTPException(status_code=404, detail="Match not found")
+    if not _owns_match(row, user):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    if row.get("status") in {"queued", "processing"}:
+        raise HTTPException(status_code=409, detail="Wait until analysis finishes")
+    delete_match(match_id)
+    return {"ok": True, "match_id": match_id}
+
+
+@app.post("/api/matches/{match_id}/analyze")
+def analyze(match_id: str, body: AnalyzeBody, user: dict = Depends(current_user)):
+    row = get_match(_valid_id(match_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if not _owns_match(row, user):
+        raise HTTPException(status_code=403, detail="Not allowed")
     if row.get("status") in {"queued", "processing"}:
         raise HTTPException(status_code=409, detail="Analysis already running")
 
@@ -189,10 +258,12 @@ def analyze(match_id: str, body: AnalyzeBody):
 
 
 @app.get("/api/matches/{match_id}/status")
-def status(match_id: str):
+def status(match_id: str, user: dict = Depends(current_user)):
     row = get_match(_valid_id(match_id))
     if not row:
         raise HTTPException(status_code=404, detail="Match not found")
+    if not _owns_match(row, user):
+        raise HTTPException(status_code=403, detail="Not allowed")
     return {
         "match_id": row["match_id"],
         "status": row.get("status"),
@@ -207,10 +278,12 @@ def status(match_id: str):
 
 
 @app.get("/api/matches/{match_id}/stats")
-def stats(match_id: str):
+def stats(match_id: str, user: dict = Depends(current_user)):
     row = get_match(_valid_id(match_id))
     if not row:
         raise HTTPException(status_code=404, detail="Match not found")
+    if not _owns_match(row, user):
+        raise HTTPException(status_code=403, detail="Not allowed")
     if row.get("status") != "completed":
         raise HTTPException(status_code=409, detail="Stats not ready")
     path = stats_path(match_id)
@@ -221,10 +294,12 @@ def stats(match_id: str):
 
 
 @app.get("/api/matches/{match_id}/video")
-def video(match_id: str):
+def video(match_id: str, user: dict = Depends(current_user)):
     row = get_match(_valid_id(match_id))
     if not row:
         raise HTTPException(status_code=404, detail="Match not found")
+    if not _owns_match(row, user):
+        raise HTTPException(status_code=403, detail="Not allowed")
     path = Path(row["video_path"])
     if not path.exists():
         raise HTTPException(status_code=404, detail="Video missing")
@@ -232,7 +307,12 @@ def video(match_id: str):
 
 
 @app.get("/api/matches/{match_id}/analysis-video")
-def analysis_video(match_id: str):
+def analysis_video(match_id: str, user: dict = Depends(current_user)):
+    row = get_match(_valid_id(match_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if not _owns_match(row, user):
+        raise HTTPException(status_code=403, detail="Not allowed")
     _valid_id(match_id)
     root = match_output_dir(match_id)
     candidates = [

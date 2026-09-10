@@ -1,7 +1,9 @@
 import { Link } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 import { ProductNav } from "../components/ProductNav";
 
 export function HomePage() {
+  const { user } = useAuth();
   return (
     <div className="app">
       <ProductNav />
@@ -13,11 +15,11 @@ export function HomePage() {
           turnovers, and shooting on a professional dashboard.
         </p>
         <div className="hero-actions">
-          <Link className="btn primary" to="/upload">
-            Upload Match Video
+          <Link className="btn primary" to={user ? "/upload" : "/signup"}>
+            {user ? "Upload Match Video" : "Create account"}
           </Link>
-          <Link className="btn ghost" to="/matches">
-            View Previous Matches
+          <Link className="btn ghost" to={user ? "/matches" : "/login"}>
+            {user ? "View Previous Matches" : "Sign in"}
           </Link>
         </div>
       </section>

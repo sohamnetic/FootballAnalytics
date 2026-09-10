@@ -1,4 +1,5 @@
 import type { MatchStats } from "../types/matchStats";
+import { apiFetch, readError } from "./client";
 
 export interface MatchRecord {
   match_id: string;
@@ -20,7 +21,7 @@ export interface MatchRecord {
 }
 
 export async function getMatchStats(matchId: string): Promise<MatchStats> {
-  const response = await fetch(`/api/matches/${matchId}/stats`);
+  const response = await apiFetch(`/api/matches/${matchId}/stats`);
   if (!response.ok) {
     throw new Error(`Failed to load match stats (${response.status})`);
   }
@@ -35,7 +36,7 @@ export async function uploadMatchVideo(file: File): Promise<{
 }> {
   const body = new FormData();
   body.append("file", file);
-  const response = await fetch("/api/matches/upload", { method: "POST", body });
+  const response = await apiFetch("/api/matches/upload", { method: "POST", body });
   if (!response.ok) {
     throw new Error(await readError(response, "Upload failed"));
   }
@@ -53,9 +54,8 @@ export async function startAnalysis(
     duration_s?: number | null;
   },
 ): Promise<{ match_id: string; status: string }> {
-  const response = await fetch(`/api/matches/${matchId}/analyze`, {
+  const response = await apiFetch(`/api/matches/${matchId}/analyze`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
@@ -65,7 +65,7 @@ export async function startAnalysis(
 }
 
 export async function getMatchStatus(matchId: string) {
-  const response = await fetch(`/api/matches/${matchId}/status`);
+  const response = await apiFetch(`/api/matches/${matchId}/status`);
   if (!response.ok) {
     throw new Error("Could not load status");
   }
@@ -80,7 +80,7 @@ export async function getMatchStatus(matchId: string) {
 }
 
 export async function listMatches(): Promise<{ matches: MatchRecord[] }> {
-  const response = await fetch("/api/matches");
+  const response = await apiFetch("/api/matches");
   if (!response.ok) {
     throw new Error("Could not load matches");
   }
@@ -88,19 +88,16 @@ export async function listMatches(): Promise<{ matches: MatchRecord[] }> {
 }
 
 export async function getMatch(matchId: string): Promise<MatchRecord> {
-  const response = await fetch(`/api/matches/${matchId}`);
+  const response = await apiFetch(`/api/matches/${matchId}`);
   if (!response.ok) {
     throw new Error("Match not found");
   }
   return response.json();
 }
 
-async function readError(response: Response, fallback: string): Promise<string> {
-  try {
-    const data = await response.json();
-    if (typeof data.detail === "string") return data.detail;
-  } catch {
-    /* ignore */
+export async function deleteMatch(matchId: string): Promise<void> {
+  const response = await apiFetch(`/api/matches/${matchId}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(await readError(response, "Could not delete match"));
   }
-  return fallback;
 }

@@ -1,17 +1,37 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { listMatches, type MatchRecord } from "../api/getMatchStats";
+import { deleteMatch, listMatches, type MatchRecord } from "../api/getMatchStats";
 import { ProductNav } from "../components/ProductNav";
 
 export function MatchesPage() {
   const [rows, setRows] = useState<MatchRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
-  useEffect(() => {
-    listMatches()
+  function refresh() {
+    return listMatches()
       .then((data) => setRows(data.matches || []))
       .catch((err: unknown) => setError(err instanceof Error ? err.message : "Failed to load"));
+  }
+
+  useEffect(() => {
+    refresh();
   }, []);
+
+  async function onDelete(row: MatchRecord) {
+    const ok = window.confirm(`Delete ${row.filename || "this match"}? This cannot be undone.`);
+    if (!ok) return;
+    setDeleting(row.match_id);
+    setError(null);
+    try {
+      await deleteMatch(row.match_id);
+      setRows((current) => current.filter((item) => item.match_id !== row.match_id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete match");
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   return (
     <div className="app">
@@ -38,19 +58,29 @@ export function MatchesPage() {
                     : ""}
                 </p>
               </div>
-              {row.status === "completed" ? (
-                <Link className="btn primary" to={`/matches/${row.match_id}`}>
-                  View
-                </Link>
-              ) : row.status === "processing" || row.status === "queued" ? (
-                <Link className="btn ghost" to={`/matches/${row.match_id}/processing`}>
-                  Status
-                </Link>
-              ) : (
-                <Link className="btn ghost" to={`/matches/${row.match_id}/setup`}>
-                  Setup
-                </Link>
-              )}
+              <div className="match-actions">
+                {row.status === "completed" ? (
+                  <Link className="btn primary" to={`/matches/${row.match_id}`}>
+                    View
+                  </Link>
+                ) : row.status === "processing" || row.status === "queued" ? (
+                  <Link className="btn ghost" to={`/matches/${row.match_id}/processing`}>
+                    Status
+                  </Link>
+                ) : (
+                  <Link className="btn ghost" to={`/matches/${row.match_id}/setup`}>
+                    Setup
+                  </Link>
+                )}
+                <button
+                  className="btn danger"
+                  type="button"
+                  disabled={deleting === row.match_id || row.status === "processing" || row.status === "queued"}
+                  onClick={() => onDelete(row)}
+                >
+                  {deleting === row.match_id ? "Deleting…" : "Delete"}
+                </button>
+              </div>
             </article>
           ))}
         </div>

@@ -30,7 +30,7 @@ KNOWN_LIMITATIONS = [
     "Shot and goal geometry is manually configured in camera pixels, not metres or homography.",
     "False-positive goals are suppressed by design; missed shots/goals are expected.",
     "Interceptions and recoveries are conservative post-process labels, not broadcast events.",
-    "Possession percentage uses confirmed possession duration over clip length; loose/candidate/unknown is excluded from team totals.",
+    "Possession % is each team's share of confirmed team possession and sums to 100%. Loose/unknown time is excluded from that split.",
 ]
 
 
@@ -205,14 +205,19 @@ def build_match_stats(
                     f"confirmed possession on stable_id {sid} with team={team or 'missing'} excluded from team_a/team_b"
                 )
 
+    team_poss = (
+        team_stats["team_a"]["possession_seconds"]
+        + team_stats["team_b"]["possession_seconds"]
+    )
     for team_id, block in team_stats.items():
-        if clip_s > 0:
-            block["possession_percentage"] = round(
-                100.0 * block["possession_seconds"] / clip_s, 2
-            )
-        else:
-            block["possession_percentage"] = None
         block["possession_seconds"] = round(block["possession_seconds"], 4)
+    if team_poss > 0:
+        a_pct = round(100.0 * team_stats["team_a"]["possession_seconds"] / team_poss, 2)
+        team_stats["team_a"]["possession_percentage"] = a_pct
+        team_stats["team_b"]["possession_percentage"] = round(100.0 - a_pct, 2)
+    else:
+        team_stats["team_a"]["possession_percentage"] = None
+        team_stats["team_b"]["possession_percentage"] = None
 
     # Passes: completed only, attributed to passer
     if not passes_df.empty:
@@ -335,6 +340,7 @@ def build_match_stats(
             "team_assignment_uncertainty": True,
             "goal_geometry_manual": True,
             "pass_attempts_available": False,
+            "possession_basis": "share_of_confirmed_team_possession",
             "possession_confirmed_seconds": round(confirmed_s, 4),
             "possession_unknown_or_unassigned_seconds": round(unknown_poss_s, 4),
             "possession_state_frames": dict(state_frames),
@@ -389,11 +395,15 @@ def validate_match_stats(payload):
         == summary["recoveries"]
     )
 
-    poss_sum = (
-        teams["team_a"]["possession_percentage"] + teams["team_b"]["possession_percentage"]
-    )
-    checks["possession_percent_not_forced_to_100"] = poss_sum <= 100.01
-    checks["possession_percent_sum"] = round(poss_sum, 2)
+    poss_a = teams["team_a"]["possession_percentage"]
+    poss_b = teams["team_b"]["possession_percentage"]
+    if poss_a is None and poss_b is None:
+        checks["possession_percent_sums_to_100"] = True
+        checks["possession_percent_sum"] = None
+    else:
+        poss_sum = round((poss_a or 0) + (poss_b or 0), 2)
+        checks["possession_percent_sums_to_100"] = poss_sum == 100
+        checks["possession_percent_sum"] = poss_sum
     checks["no_unknown_team_in_team_blocks"] = set(teams.keys()) == {"team_a", "team_b"}
     checks["no_duplicate_player_ids"] = len(players) == len({p["stable_id"] for p in players})
     checks["all_players_have_valid_team"] = all(p["team_id"] in VALID_TEAMS for p in players)

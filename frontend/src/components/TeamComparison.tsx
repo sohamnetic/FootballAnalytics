@@ -50,7 +50,6 @@ export function TeamComparison({
 }) {
   const possA = teamA.possession_percentage ?? 0;
   const possB = teamB.possession_percentage ?? 0;
-  const rest = Math.max(0, 100 - possA - possB);
   return (
     <section className="section">
       <h2>Team comparison</h2>
@@ -67,12 +66,11 @@ export function TeamComparison({
         </div>
         <div style={{ marginTop: 16 }}>
           <div className="label" style={{ color: "var(--muted)", fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase" }}>
-            Possession share of clip (remainder is loose / unknown)
+            Share of confirmed possession (sums to 100%)
           </div>
           <div className="bar" style={{ marginTop: 8, height: 10 }}>
             <i className="a" style={{ width: `${possA}%` }} />
             <i className="b" style={{ width: `${possB}%` }} />
-            <i className="rest" style={{ width: `${rest}%` }} />
           </div>
         </div>
       </div>

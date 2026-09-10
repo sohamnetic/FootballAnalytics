@@ -1,12 +1,15 @@
 {
   "match": {
-    "video": "videos\\raw\\match.mp4",
+    "video": "D:\\FootballAnalytics\\videos\\raw\\match.mp4",
     "start_time_s": 200.0,
     "duration_s": 40.0,
     "fps": 59.9401,
-    "clip_duration_used_s": 40.0
+    "clip_duration_used_s": 40.0,
+    "team_a_name": "Team A",
+    "team_b_name": "Team B",
+    "match_id": "c200d040-0000-4000-8000-000000000040"
   },
-  "generated_at": "2026-09-10T10:52:23.266186+00:00",
+  "generated_at": "2026-09-10T12:05:46.864769+00:00",
   "pipeline_version": "mvp-product-data-v1",
   "identity_quality": "MVP_FRAGMENTED",
   "data_quality": {
@@ -23,6 +26,7 @@
     "team_assignment_uncertainty": true,
     "goal_geometry_manual": true,
     "pass_attempts_available": false,
+    "possession_basis": "share_of_confirmed_team_possession",
     "possession_confirmed_seconds": 11.7784,
     "possession_unknown_or_unassigned_seconds": 2.4691,
     "possession_state_frames": {
@@ -44,7 +48,7 @@
   },
   "teams": {
     "team_a": {
-      "possession_percentage": 14.97,
+      "possession_percentage": 64.34,
       "possession_seconds": 5.9893,
       "goals": 0,
       "shots": 0,
@@ -55,7 +59,7 @@
       "ball_recoveries": 1
     },
     "team_b": {
-      "possession_percentage": 8.3,
+      "possession_percentage": 35.66,
       "possession_seconds": 3.32,
       "goals": 0,
       "shots": 1,
@@ -887,7 +891,7 @@
     "Shot and goal geometry is manually configured in camera pixels, not metres or homography.",
     "False-positive goals are suppressed by design; missed shots/goals are expected.",
     "Interceptions and recoveries are conservative post-process labels, not broadcast events.",
-    "Possession percentage uses confirmed possession duration over clip length; loose/candidate/unknown is excluded from team totals."
+    "Possession % is each team's share of confirmed team possession and sums to 100%. Loose/unknown time is excluded from that split."
   ],
   "inconsistencies": [
     "confirmed possession on stable_id 46 with team=unknown excluded from team_a/team_b",
@@ -903,8 +907,8 @@
     "team_passes_eq_player_passes": true,
     "team_intercepts_eq_player_intercepts": true,
     "team_recoveries_eq_player_recoveries": true,
-    "possession_percent_not_forced_to_100": true,
-    "possession_percent_sum": 23.27,
+    "possession_percent_sums_to_100": true,
+    "possession_percent_sum": 100.0,
     "no_unknown_team_in_team_blocks": true,
     "no_duplicate_player_ids": true,
     "all_players_have_valid_team": true,
