@@ -26,5 +26,12 @@ frontend/dist/
 data/uploads/
 data/matches_index.json
 
+# Videos (keep local; do not push match footage)
+videos/**/*.mp4
+*.mp4
+*.mov
+*.avi
+*.mkv
+
 # Windows
 Thumbs.db
