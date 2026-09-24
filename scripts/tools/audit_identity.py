@@ -13,11 +13,7 @@ from config.config import COORDINATE_OUTPUT, IDENTITY_OUTPUT, TEST_VIDEO
 
 AUDIT_GAP = 180
 CANDIDATE_DIST = 250
-# Approximation of IdentityManager's adaptive gate (config.py
-# IDENTITY_MAX_FRAME_GAP / IDENTITY_MAX_DISTANCE_CEILING_PX) for the
-# "would today's matcher already have merged this" flag below. The real
-# gate scales distance with frame gap and also applies an appearance
-# check; this column is a rough proxy, not a re-implementation.
+# rough version of IdentityManager's distance check, just for the audit column
 CURRENT_GAP = 220
 CURRENT_DIST = 550
 SHORT_FRAMES = 120

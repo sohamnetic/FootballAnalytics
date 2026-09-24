@@ -3,28 +3,13 @@ import numpy as np
 
 
 class JerseyColorExtractor:
-    """
-    Extracts the dominant jersey colour from a player's bounding box.
-    """
+    """Gets the shirt colour of a player."""
 
     def __init__(self, upper_body_ratio=0.40):
         self.upper_body_ratio = upper_body_ratio
 
     def extract_color(self, frame, bbox):
-        """
-        Parameters
-        ----------
-        frame : np.ndarray
-            Original video frame
-
-        bbox : tuple
-            (x1, y1, x2, y2)
-
-        Returns
-        -------
-        tuple
-            Average BGR colour
-        """
+        """Average BGR colour of the shirt area in bbox (x1, y1, x2, y2)."""
 
         x1, y1, x2, y2 = bbox
 
@@ -76,28 +61,16 @@ class JerseyColorExtractor:
 
     @staticmethod
     def bgr_to_lab(bgr):
-        """Convert a BGR tuple to OpenCV Lab. Reserved for later clustering."""
+        """BGR -> OpenCV Lab."""
         pixel = np.uint8([[list(bgr)]])
         lab = cv2.cvtColor(pixel, cv2.COLOR_BGR2LAB)[0, 0]
         return (int(lab[0]), int(lab[1]), int(lab[2]))
 
-    # ------------------------------------------------------------------
-    # Two-region histogram descriptor: used by identity rematch as a more
-    # lighting-robust appearance signal than a single mean-BGR sample.
-    # A single mean colour is dominated by whichever pixels (shadow, pitch
-    # bleed, motion blur) happen to fall in the crop; an HS histogram over
-    # two body regions survives that noise much better. See
-    # scripts/identity/identity_manager.py and docs/architecture.md.
-    # ------------------------------------------------------------------
+    # Colour histograms of shirt and shorts. Works a lot better than one
+    # average colour, which shadows and grass mess up.
 
     def extract_descriptor(self, frame, bbox, bins=12):
-        """
-        Two-region (upper jersey + lower shorts) HS histogram descriptor.
-
-        Returns (upper_hist, lower_hist), each a normalized cv2 histogram
-        or None if that region could not be sampled. Returns None only if
-        neither region could be sampled.
-        """
+        """Returns (shirt_hist, shorts_hist). Either can be None, or None if both fail."""
         x1, y1, x2, y2 = bbox
         h, w = frame.shape[:2]
 
@@ -136,11 +109,7 @@ class JerseyColorExtractor:
 
     @staticmethod
     def descriptor_distance(a, b):
-        """
-        Average Bhattacharyya distance over the two regions.
-        0 = identical, 1 = disjoint. None if neither side has any region
-        in common (caller should treat that as "unknown", not "different").
-        """
+        """0 = same colours, 1 = totally different. None if we can't compare."""
         if a is None or b is None:
             return None
         dists = []
@@ -154,8 +123,7 @@ class JerseyColorExtractor:
 
     @staticmethod
     def descriptor_running_avg(old, new):
-        """Elementwise average of two descriptors. Histograms average safely
-        (unlike hue angles, there is no wraparound)."""
+        """Average of two descriptors."""
         if old is None:
             return new
         if new is None:

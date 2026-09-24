@@ -29,16 +29,11 @@ class PlayerProfile:
     # Running average player height (pixels)
     average_height: float = 0.0
 
-    # Running average upper-body jersey colour (BGR). Kept for debugging /
-    # audit only; rematch uses jersey_descriptor below.
+    # average shirt colour (BGR), only for debugging
     jersey_color: Optional[Tuple[int, int, int]] = None
 
-    # Running-average two-region (upper/lower) HS histogram descriptor.
-    # See scripts/vision/jersey_color.py JerseyColorExtractor.extract_descriptor.
-    # Soft/hard appearance signal only, not a unique player identifier.
+    # shirt + shorts colour histogram (see jersey_color.py)
     jersey_descriptor: Optional[tuple] = None
 
-    # Number of frames this profile has been updated on. Used to avoid
-    # gating on a single noisy sample (e.g. height_ratio right after
-    # registration).
+    # how many frames we've seen this player
     sample_count: int = 0

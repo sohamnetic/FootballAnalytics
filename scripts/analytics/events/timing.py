@@ -1,9 +1,8 @@
 """
-Event time windows in frames for one video.
+Convert the time settings from config.py (seconds) into frames for a video.
 
-Thresholds live in config.py as seconds; every engine converts them with
-the real fps of the video it is processing, so a 30 fps upload gets the
-same time windows as the 60 fps footage they were tuned on.
+Originally these were frame counts tuned on 60 fps video, which broke on
+30 fps uploads.
 """
 from dataclasses import dataclass
 
@@ -82,7 +81,7 @@ class EventTiming:
     def goal_vanish(self):
         return self.f(GOAL_VANISH_S)
 
-    # confidence heuristics (were 10 / 20 / 15 frames at 59.94 fps)
+    # used for confidence scores
     @property
     def quick_transition(self):
         return self.f(0.17)

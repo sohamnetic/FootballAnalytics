@@ -1,4 +1,4 @@
-"""Background analysis jobs: subprocess into existing run_mvp CLI."""
+"""Runs the analysis in the background (calls run_mvp)."""
 
 from __future__ import annotations
 

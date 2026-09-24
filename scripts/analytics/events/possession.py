@@ -1,11 +1,8 @@
 """
-Ball time series and nearest-player possession (Phase 1).
+Who has the ball in every frame.
 
-Person and sports ball use separate IdentityManagers, so this module
-always filters by class before using stable_id.
-
-Ball position is bbox centre (x1+x2)/2, (y1+y2)/2 — not CSV center_x/y.
-Player position remains CSV center_x/y (feet / bbox bottom-centre).
+Ball position is the centre of its box, players are at their feet
+(center_x/center_y in the CSV).
 """
 
 from __future__ import annotations
@@ -145,8 +142,7 @@ class PossessionEngine:
         return series
 
     def _nearest_player(self, ball, players):
-        """Nearest player by ball-to-feet distance in body heights.
-        Returns (id, distance_px, distance_bh, {id: distance_bh})."""
+        """Closest player to the ball, distance measured in their body heights."""
         if ball is None or not players:
             return None, None, None, {}
         best = None
@@ -160,9 +156,7 @@ class PossessionEngine:
         return best[0], best[1], best[2], rel
 
     def _moves_with(self, frame, sid, ball_series, feet):
-        """False when the ball flies past the player instead of moving with
-        them: relative ball-player speed over a short window, in the
-        player's body heights per second. Unknown counts as moving with."""
+        """Is the ball moving with this player, or just flying past?"""
         k = self.speed_half_window
         a, b = ball_series.get(frame - k), ball_series.get(frame + k)
         pa, pb = feet.get((frame - k, sid)), feet.get((frame + k, sid))
@@ -214,7 +208,7 @@ class PossessionEngine:
                     target = None
                 else:
                     target = nearest_id
-                    # the player on the ball keeps it unless clearly beaten to it
+                    # whoever has the ball keeps it unless someone is clearly closer
                     held = rel.get(confirmed)
                     if (
                         confirmed is not None

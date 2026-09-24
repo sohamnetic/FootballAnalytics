@@ -1,10 +1,9 @@
 """
-Shot / goal classification on synthetic scenes (no video, no models).
+Tests for shot/goal detection using made-up data (no video needed).
+The camera pans the whole time, so everything moves across the image.
 
-The camera pans throughout: goal, players and ball all drift across the
-image, so a pass that only works in fixed pixels would fail here.
-
-  python -m pytest tests/test_shots.py     (or: python -m tests.test_shots)
+  python -m pytest tests/test_shots.py
+  python -m tests.test_shots
 """
 import tempfile
 from pathlib import Path
@@ -15,15 +14,15 @@ from scripts.analytics.events.shots import detect_shots
 
 FPS = 30.0
 PAN_PX_PER_FRAME = 3.0
-GOAL = (1500, 300, 1700, 450)          # goal box before panning, 150 px high
-SHOOTER_FEET = (1100, 700)             # 180 px tall player
+GOAL = (1500, 300, 1700, 450)
+SHOOTER_FEET = (1100, 700)
 TEAMMATE_FEET = (900, 600)
 KEEPER_BOX = (1560, 250, 1620, 420)
-TARGETS = {                            # where the struck ball ends up
-    "goal": (1660, 330),               # in the net, clear of the keeper
-    "wide": (1850, 470),               # past the post
-    "save": (1590, 400),               # at the keeper, who takes it
-    "pass": (900, 595),                # to the teammate's feet
+TARGETS = {                            # where the ball ends up
+    "goal": (1660, 330),
+    "wide": (1850, 470),
+    "save": (1590, 400),
+    "pass": (900, 595),
 }
 
 
@@ -33,7 +32,7 @@ def _person(frame, sid, x1, y1, x2, y2):
 
 
 def _scene(kind, folder):
-    """Player 1 (team_a) holds the ball for 40 frames, then strikes it."""
+    """Player 1 has the ball for 40 frames and then kicks it."""
     states, people, goals = [], [], []
     tx, ty = TARGETS[kind]
     for f in range(1, 151):

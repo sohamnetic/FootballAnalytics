@@ -1,16 +1,10 @@
 """
-MVP interceptions and ball recoveries.
+Interceptions and recoveries.
 
-Post-process of confirmed possession intervals + team assignment.
-Does not modify possession.py, passes.py, or frame_state.csv.
-
-Precedence for a consecutive confirmed-possession pair:
-  1. same-team pass-quality → skip (already handled by passes.py)
-  2. cross-team, short, ball evidence → interception
-  3. loose/unknown gap, valid new owner → recovery
-  4. otherwise unknown_turnover or rejected
-
-stable_id is an MVP identity, not a guaranteed real player.
+For each change of possession:
+- to a teammate = pass, handled in passes.py
+- straight to the other team = interception
+- after a loose ball = recovery
 """
 
 from __future__ import annotations
@@ -83,9 +77,7 @@ def _write_csv(path, rows, fieldnames):
 
 
 def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats, timing):
-    """
-    Classify one confirmed-interval pair. Never emits a completed_pass event.
-    """
+    """What kind of turnover is this change of possession?"""
     passer = prev["stable_id"]
     receiver = nxt["stable_id"]
     transition_frames = max(0, nxt["start_frame"] - prev["end_frame"] - 1)
@@ -130,7 +122,7 @@ def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats, timing):
             "confidence": "",
         }
 
-    # Cross-team: interception candidate
+    # other team got it -> interception
     both_valid = prev_team in VALID_TEAMS and next_team in VALID_TEAMS
     if both_valid and prev_team != next_team:
         if transition_frames > timing.interception_max_transition:
@@ -152,13 +144,12 @@ def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats, timing):
             "confidence": conf,
         }
 
-    # Loose/unknown gap: recovery candidate (not a classified pass or intercept)
+    # ball was loose first -> recovery
     if next_team in VALID_TEAMS and transition_frames <= timing.recovery_max_transition:
         mostly_loose = gap_stats["n"] == 0 or gap_stats["loose_ratio"] >= 0.5
         prev_unreliable = prev_team not in VALID_TEAMS
         if mostly_loose and (prev_unreliable or gap_stats["loose_ratio"] >= 0.5):
-            # Direct cross-team with valid teams already handled. Same-team
-            # non-pass (e.g. unknown_transition missing team on one side) can recover.
+
             if both_valid and prev_team == next_team:
                 return {
                     "classification": "unknown_turnover",

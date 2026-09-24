@@ -1,4 +1,4 @@
-"""Fetch every model the pipeline needs into models/ (skips files already present)."""
+"""Download the models into models/ (skips the ones you already have)."""
 import urllib.request
 
 from ultralytics import YOLO

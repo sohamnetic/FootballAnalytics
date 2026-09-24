@@ -1,9 +1,4 @@
-"""
-MVP pass detection from confirmed possession intervals + team assignment.
-
-Does not modify frame_state.csv or possession logic.
-stable_id is an MVP identity, not a guaranteed real player.
-"""
+"""Completed passes: ball goes from one player to a teammate."""
 
 from __future__ import annotations
 
@@ -60,10 +55,8 @@ def _load_teams(teams_csv):
 
 def _confirmed_intervals(frame_df, merge_gap_frames=0):
     """
-    Contiguous runs of possession_state == confirmed with the same possessor.
-    Runs of one player split by a gap of at most merge_gap_frames (a dribble:
-    the ball pushed ahead, then collected again) are one possession; its
-    "frames" counts only the confirmed frames.
+    Possession spells from frame_state. Short gaps for the same player
+    (pushing the ball ahead while dribbling) are joined into one spell.
     """
     intervals = []
     current = None
@@ -124,7 +117,7 @@ def _confirmed_intervals(frame_df, merge_gap_frames=0):
 
 
 def _transition_ball_stats(frame_df, start_frame, end_frame):
-    """Inclusive open interval (start_frame, end_frame) i.e. frames strictly between."""
+    """Ball stats for the frames between start_frame and end_frame."""
     if end_frame <= start_frame + 1:
         return {"n": 0, "missing": 0, "detected": 0, "interpolated": 0, "missing_ratio": 0.0}
 

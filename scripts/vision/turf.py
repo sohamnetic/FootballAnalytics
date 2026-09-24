@@ -1,9 +1,9 @@
-"""Artificial-turf colour test (HSV range in config.py)."""
+"""Is this pixel turf? (HSV range is in config.py)"""
 from config.config import IDENTITY_TURF_HSV_MAX, IDENTITY_TURF_HSV_MIN
 
 
 def turf_mask(hsv_pixels):
-    """hsv_pixels: (N, 3) OpenCV HSV. True where the pixel looks like turf."""
+    """hsv_pixels is an (N, 3) array in OpenCV HSV."""
     lo, hi = IDENTITY_TURF_HSV_MIN, IDENTITY_TURF_HSV_MAX
     return (
         (hsv_pixels[:, 0] >= lo[0]) & (hsv_pixels[:, 0] <= hi[0])

@@ -1,29 +1,19 @@
 """
-Shots, shots on target and goals, measured against the goals seen in the video.
+Shots and goals.
 
-Where the goals are comes from scripts/vision/goals.py (detected posts + net,
-tracked through camera pans). A player's possession ends; the ball's flight
-over the next SHOT_WINDOW_S is followed relative to the goal box of the same
-frame, so a camera pan does not look like ball movement:
+When a player loses the ball we follow it for SHOT_WINDOW_S and look at
+where it goes compared to the goal box in the same frame (goal boxes come
+from scripts/vision/goals.py). Because it's relative to the goal, camera
+pans don't matter.
 
-  goal      the ball goes deep into the goal box and stays there
-            (GOAL_MIN_INSIDE_S) or disappears in it (GOAL_VANISH_S), with no
-            player on it: a ball at a keeper's feet on the line, or in a
-            goalmouth scramble, projects into the box too, but a ball in the
-            net has nobody on it (GOAL_FREE_BALL_MARGIN).
-  shot      the ball leaves the shooter's feet, is struck (SHOT_MIN_SPEED_BH_S;
-            faster than SHOT_MAX_SPEED_BH_S is a ball-tracking jump, not a
-            kick) from within SHOT_MAX_START_GH, travels toward the goal
-            (within SHOT_MAX_AIM_ANGLE_DEG, aim within SHOT_AIM_MARGIN of the
-            box) and gets closer to it, and either gets near it
-            (SHOT_NEAR_GOAL_GH) or is stopped by the other team (block / save).
-  on target a goal, or a shot aimed inside the box that reached it or was
-            saved near it.
-A ball played to a teammate is a pass, not a shot. A shot only counts if a
-goal is in view; shots at an off-screen goal are not measured.
+- goal: ball ends up inside the goal box and stays there (or disappears in
+  it), and no player is standing on it
+- shot: ball kicked hard enough towards the goal and either gets close or
+  gets blocked/saved by the other team
+- ball going to a teammate is a pass, not a shot
+- if no goal is visible we can't tell, so it's skipped
 
-Distances are in goal box heights (GH, ~2 m) and speeds in the shooter's
-body heights per second (BH/s, ~1.8 m/s), so zoom cancels out.
+GH = goal box height (~2 m), BH = shooter's height (~1.8 m).
 """
 
 from __future__ import annotations
@@ -97,7 +87,7 @@ def _inside(x, y, box, inset=0.0):
 
 
 def _ray_hits_box(p, v, half_w, half_h):
-    """Ray p + t v (t > 0) against the box [-half_w, half_w] x [-half_h, half_h]."""
+    """Does the ray from p in direction v hit the box (centred on 0)?"""
     t_lo, t_hi = 0.0, np.inf
     for pi, vi, h in ((p[0], v[0], half_w), (p[1], v[1], half_h)):
         if abs(vi) < 1e-9:
@@ -110,7 +100,7 @@ def _ray_hits_box(p, v, half_w, half_h):
 
 
 def _aim_offset(p, v, w, h):
-    """How far the aim misses the goal box, in box widths (0 = inside)."""
+    """How many goal widths wide the aim is (0 = on target)."""
     for margin in np.arange(0.0, 3.01, 0.05):
         if _ray_hits_box(p, v, w * (0.5 + margin), h * 0.5 + margin * w):
             return round(float(margin), 2)
@@ -118,7 +108,7 @@ def _aim_offset(p, v, w, h):
 
 
 class _Scene:
-    """Per-frame lookups: ball, goals, people."""
+    """Ball, goals and people per frame."""
 
     def __init__(self, frame_df, goals, people):
         fd = frame_df.sort_values("frame")
@@ -132,7 +122,7 @@ class _Scene:
         self.people = people
 
     def goal_near(self, frame, ref):
-        """The goal box in `frame` that continues `ref` (same physical goal)."""
+        """Find the same goal as `ref` in this frame."""
         boxes = self.goals.get(frame)
         if not boxes:
             return None
@@ -140,7 +130,7 @@ class _Scene:
             return None
         rc = ((ref[0] + ref[2]) / 2, (ref[1] + ref[3]) / 2)
         best = min(boxes, key=lambda b: np.hypot((b[0] + b[2]) / 2 - rc[0], (b[1] + b[3]) / 2 - rc[1]))
-        # a goal cannot jump more than half its own size between nearby frames
+        # goal can't move that much between frames, must be the other goal
         if np.hypot((best[0] + best[2]) / 2 - rc[0], (best[1] + best[3]) / 2 - rc[1]) > 0.5 * max(
             ref[2] - ref[0], ref[3] - ref[1]
         ):
@@ -148,9 +138,7 @@ class _Scene:
         return best
 
     def free(self, frame, x, y):
-        """Nobody on the ball: it is not on or right beside a player (their
-        box widened by GOAL_FREE_BALL_MARGIN of its width each side and
-        extended a little below the feet)."""
+        """True if no player is on top of or right next to the ball."""
         for x1, y1, x2, y2 in self.people.get(frame, ()):
             mx = GOAL_FREE_BALL_MARGIN * (x2 - x1)
             if x1 - mx <= x <= x2 + mx and y1 <= y <= y2 + 0.1 * (y2 - y1):
@@ -159,7 +147,7 @@ class _Scene:
 
 
 def _load_people(coordinate_csv):
-    """people: {frame: [box]}; feet: {(frame, stable_id): (x, y, body height)}."""
+    """Returns people boxes per frame and each player's feet position + height."""
     people, feet = {}, {}
     if coordinate_csv is None or not Path(coordinate_csv).exists():
         return people, feet
@@ -183,7 +171,7 @@ def _shooter_feet(feet, sid, frame, timing):
 
 
 def _flight(scene, start, end, timing):
-    """Ball positions after the touch, relative to the goal it heads to."""
+    """Ball positions after the kick, relative to the goal."""
     first_ball = None
     for f in range(start, end + 1):
         if f in scene.ball:
@@ -192,7 +180,7 @@ def _flight(scene, start, end, timing):
     if first_ball is None:
         return None
     f0, (bx, by) = first_ball
-    # target: the goal in view closest to the ball at the start of the flight
+    # use the goal closest to the ball
     target = None
     for f in range(f0, min(end, f0 + timing.shot_aim) + 1):
         boxes = scene.goals.get(f)
@@ -226,12 +214,12 @@ def _flight(scene, start, end, timing):
 
 
 def _goal_scored(points, timing):
-    """Ball stays in the net, or disappears in it."""
+    """Did the ball end up in the net?"""
     seen = [p for p in points if not p.get("missing")]
     inside = sum(1 for p in seen if p["inside"])
     if inside >= timing.goal_min_inside:
         return True, inside
-    # last sighting inside the net, then gone
+    # or it was last seen in the net and then disappeared
     last_inside = None
     for i, p in enumerate(points):
         if not p.get("missing"):
@@ -269,7 +257,7 @@ def classify_shot(interval, nxt, teams, scene, feet, last_frame, timing):
             return reject("ball_not_at_shooter")
 
     flight_end = min(end + timing.shot_window, last_frame)
-    # the net check runs a little longer: a ball in the net can vanish
+    # look a bit longer for the goal check, the ball can disappear in the net
     net_end = min(flight_end + timing.goal_vanish, last_frame)
     flight = _flight(scene, end, net_end, timing)
     if flight is None:
@@ -281,14 +269,14 @@ def classify_shot(interval, nxt, teams, scene, feet, last_frame, timing):
     if len(pts) < 3:
         return reject("too_few_ball_positions")
 
-    # stop the flight where someone else takes the ball (unless it is in the net)
+    # cut the flight when someone else gets the ball
     next_start = nxt["start_frame"] if nxt is not None else None
     in_flight = [p for p in pts if p["frame"] <= flight_end and (next_start is None or p["frame"] < next_start)]
     if len(in_flight) < 2:
         in_flight = pts[:2]
 
-    # drop single-frame jumps (the ball track briefly on another object);
-    # if many points jump, the whole flight is unreliable
+    # remove points where the ball "jumps" (detector picked something else).
+    # too many jumps and we don't trust this flight at all
     bh = shooter_feet[2] if shooter_feet else None
     if bh:
         kept = [in_flight[0]]
@@ -323,8 +311,7 @@ def classify_shot(interval, nxt, teams, scene, feet, last_frame, timing):
     w_gh = (box[2] - box[0]) / max(box[3] - box[1], 1.0)
     offset = _aim_offset(p0, p1 - p0, w_gh, 1.0)
     out["aim_offset"] = "" if offset is None else offset
-    # direction of travel vs direction to the goal centre (the box test alone
-    # passes anything that starts close to the goal)
+    # angle between where the ball goes and where the goal is
     v, to_goal = p1 - p0, -p0
     norm = float(np.linalg.norm(v) * np.linalg.norm(to_goal))
     angle = float(np.degrees(np.arccos(np.clip(v @ to_goal / norm, -1.0, 1.0)))) if norm > 0 else 180.0
@@ -333,14 +320,13 @@ def classify_shot(interval, nxt, teams, scene, feet, last_frame, timing):
 
     scored, inside = _goal_scored(flight["points"], timing)
     out["inside_frames"] = inside
-    # a goal still needs a real strike toward the goal on a clean ball track
+    # no goal if the ball wasn't really kicked at the goal
     if scored and (angle >= 90.0 or unreliable):
         scored = False
 
     next_team = teams.get(nxt["stable_id"]) if nxt is not None else None
     gap = (nxt["start_frame"] - end - 1) if nxt is not None else None
-    # a teammate who collects a rebound after the ball reached the goal did
-    # not receive a pass
+    # teammate picking up a rebound isn't a pass
     reached = next((p["frame"] for p in pts if p["dist"] <= 0.5), None)
     to_teammate = (
         next_team == team and nxt["stable_id"] != shooter and gap is not None and gap <= timing.pass_max_transition
@@ -354,8 +340,7 @@ def classify_shot(interval, nxt, teams, scene, feet, last_frame, timing):
             return reject("not_struck")
         if unreliable:
             return reject("ball_track_jump")
-        # straight at the box and moving toward it, or roughly toward the
-        # goal centre and within the wide-shot margin
+        # on target, or at least roughly towards the goal
         at_box = offset == 0.0 and angle < 90.0
         if not at_box and (angle > SHOT_MAX_AIM_ANGLE_DEG or offset is None or offset > SHOT_AIM_MARGIN):
             return reject("not_aimed_at_goal")
@@ -405,7 +390,7 @@ def detect_shots(frame_state_csv, teams_csv, fps, goals_csv, coordinate_csv=None
         nxt = intervals[i + 1] if i + 1 < len(intervals) else None
         r = classify_shot(interval, nxt, teams, scene, feet, last_frame, timing)
         if r["accepted"] and interval["end_frame"] <= busy_until:
-            # possession flicker around one strike: the first touch is the shot
+            # same shot counted twice, keep the first one
             r.update(accepted=False, on_target=False, goal=False, outcome="", reason="duplicate_of_previous_shot")
         validation.append(r)
         if not r["accepted"]:
@@ -461,7 +446,7 @@ def _write_shooting_stats(shots, suffix):
 
 
 def write_shot_validation_video(video_path, frame_state_csv, goals_csv, shots, output_path):
-    """Goal boxes, ball and shot labels over the source video."""
+    """Debug video with goal boxes, ball and shot labels."""
     frame_df = pd.read_csv(frame_state_csv)
     balls = {
         int(r.frame): (int(r.ball_x), int(r.ball_y))

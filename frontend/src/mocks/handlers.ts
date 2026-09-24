@@ -1,8 +1,5 @@
-/**
- * Demo-mode API (npm run dev:mock): an in-memory stand-in for the FastAPI
- * backend so the UI can be explored and developed without the GPU pipeline.
- * Stats come from a real pipeline run (matchStats.json).
- */
+// Fake API for demo mode (npm run dev:mock), so the site works without the
+// Python backend. The stats are from a real run.
 import { delay, http, HttpResponse } from "msw";
 import stats from "./matchStats.json";
 

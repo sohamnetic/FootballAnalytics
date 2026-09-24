@@ -37,17 +37,13 @@ from scripts.vision.goals import GoalDetector, goal_model_available, goals_path,
 
 
 def camera_summary_path(coordinate_output):
-    """Where run_tracking records how much the camera moved."""
+    """Path of the camera movement summary for a coordinates CSV."""
     coordinate_output = Path(coordinate_output)
     return coordinate_output.with_name(f"{coordinate_output.stem}_camera.json")
 
 
 def _apply_identity_resolution(collector, coordinate_output, fps, report_path):
-    """
-    Replace provisional stable_ids in the coordinate CSV with resolved
-    identities and drop non-player person rows (spectators, bench, staff).
-    Ball rows are untouched.
-    """
+    """Rewrite the CSV with the resolved player ids and drop non-players."""
     from scripts.identity.resolver import resolve_identities
 
     t0 = time.time()
@@ -112,13 +108,9 @@ def run_tracking(
     tracking_name="match_tracking",
 ):
     """
-    Run YOLO11 + ByteTrack, log coordinates, and save an annotated video.
-
-    With IDENTITY_RESOLVER_ENABLED, stable_id in the written CSV is the
-    offline-resolved player identity and non-player person rows are removed.
-    Optional start_time/duration seek so frames before the segment are not processed.
-
-    CSV `frame` is the original 1-based video frame index.
+    Detect and track players and the ball, write the coordinates CSV.
+    start_time/duration let you do just part of the video. `frame` in the
+    CSV is the 1-based frame number of the original video.
     """
 
     if video_path is None:
@@ -167,14 +159,14 @@ def run_tracking(
 
     print("\nLoading YOLO model...")
 
-    # Separate instances: predict() on the tracking instance would reset ByteTrack.
+    # two separate models, calling predict() on the tracker resets ByteTrack
     model = YOLO(PERSON_MODEL)
     ball_model = YOLO(YOLO_MODEL)
 
     print(f"Person tracker loaded  : {PERSON_MODEL.name}")
     print(f"Ball detector loaded   : {YOLO_MODEL.name} (separate predictor)")
 
-    # Without the goal model, shots/goals are reported as not measured.
+    # no goal model = no shots/goals
     goal_detector = GoalDetector(DEVICE) if goal_model_available() else None
     goal_every = max(1, int(round(GOAL_DETECT_EVERY_S * fps)))
     goal_detections = {}
@@ -280,8 +272,7 @@ def run_tracking(
                     "position": (int((x1 + x2) / 2), int(y2)),
                 })
 
-        # Provisional online identity; replaced by offline resolution below
-        # when IDENTITY_RESOLVER_ENABLED.
+        # temporary ids, the resolver replaces them at the end
         stable_ids = identity_manager.assign_frame(
             original_frame,
             [
@@ -309,7 +300,7 @@ def run_tracking(
                 y2=y2
             )
 
-        # Ball-only detect: same model, no ByteTrack, no IdentityManager.
+        # ball detection (no tracker)
         ball_results = ball_model.predict(
             source=frame,
             classes=[BALL_CLASS_ID],
@@ -319,8 +310,7 @@ def run_tracking(
             verbose=False,
         )
         ball_result = ball_results[0]
-        # Every candidate is kept; the real ball is chosen after tracking,
-        # when static look-alikes can be told apart (scripts/vision/ball_filter.py).
+        # keep all candidates, the real ball gets picked after tracking (ball_filter.py)
         frame_balls = []
         if ball_result.boxes is not None:
             for box in ball_result.boxes:
@@ -389,7 +379,7 @@ def run_tracking(
         goal_rows = smooth_goals(goal_detections, camera_transforms, fps, width, height)
         write_goals(goal_rows, goal_file)
     elif goal_file.exists():
-        goal_file.unlink()  # a stale file would pass for this run's goals
+        goal_file.unlink()  # don't leave an old goals file around
 
     rematch_audit = identity_manager.write_rematch_audit(
         IDENTITY_OUTPUT / "rematch_audit.csv"

@@ -1,13 +1,9 @@
 """
-Team assignment.
+Put every player in team_a, team_b, referee or unknown.
 
-Assigns each person stable_id to team_a, team_b, referee, or unknown.
-This is NOT exact player identification. Sports ball rows are ignored.
-
-When the identity resolver ran, its kit groups decide (assign_teams_by_kit):
-the two kits worn by the most players are the teams; anyone else is a
-goalkeeper (stays near a goal; team = where their distributions go) or the
-referee. Otherwise jersey colours are clustered into two teams.
+If the identity resolver ran we use its kit groups: the two most common
+kits are the teams. Anyone else is a keeper (if they stay near a goal) or
+the referee. Otherwise we fall back to clustering shirt colours.
 """
 
 from __future__ import annotations
@@ -47,13 +43,7 @@ UNKNOWN = "unknown"
 
 
 def _color_feature(bgr):
-    """
-    Cluster feature from BGR via HSV.
-
-    Hue is encoded as (cos, sin) weighted by saturation so wraparound
-    is handled and grey/dark kits sit near the origin. Lab can replace
-    this later without changing assignment I/O.
-    """
+    """Colour -> feature for clustering. Hue as cos/sin so red wraps around."""
     h, s, v = JerseyColorExtractor.bgr_to_hsv(bgr)
     angle = (h / 180.0) * 2.0 * math.pi
     sat = s / 255.0
@@ -141,7 +131,7 @@ def collect_jersey_samples(
 
 
 def _robust_representative(colors):
-    """Median BGR after dropping hue outliers when possible."""
+    """Median colour, ignoring odd hues."""
     if not colors:
         return None, 0.0
 
@@ -212,7 +202,7 @@ def assign_teams(samples, min_samples=TEAM_MIN_SAMPLES):
     features = np.stack([_color_feature(reps[sid]) for sid in clusterable])
     labels, centers = _kmeans_two(features)
 
-    # Label clusters by mean hue so team_a / team_b are stable-ish across runs.
+    # sort by hue so team_a/team_b don't swap between runs
     cluster_hues = []
     for k in (0, 1):
         members = [clusterable[i] for i, lab in enumerate(labels) if lab == k]
@@ -296,15 +286,14 @@ DEFAULT_KIT_BGR = {TEAM_A: (60, 60, 225), TEAM_B: (225, 150, 60)}
 
 
 def kit_bgr(hue_bin, bins=18):
-    """A clean display colour for a kit hue bin (OpenCV hue, 0-180)."""
+    """Nice looking colour for a kit hue bin."""
     hue = int((hue_bin + 0.5) * 180 / bins)
     hsv = np.uint8([[[hue, 190, 235]]])
     return tuple(int(v) for v in cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0])
 
 
 def team_kit_colors(csv_path, teams_csv):
-    """{team_a/team_b: BGR} from the kit worn by most of each team's
-    detections (identity resolver report); fixed defaults otherwise."""
+    """Colour of each team's kit, or defaults if we don't know."""
     colors = dict(DEFAULT_KIT_BGR)
     report_path = identity_report_path(csv_path)
     if not report_path.exists() or not Path(teams_csv).exists():
@@ -331,7 +320,7 @@ def identity_report_path(csv_path):
 
 
 def _goalkeepers(csv_path, goals_csv, candidates):
-    """Candidates whose feet are near a goal most of the time a goal is in view."""
+    """Players who spend most of their time next to a goal."""
     goals = load_goals(goals_csv) if goals_csv else None
     if not goals or not candidates:
         return {}
@@ -360,7 +349,7 @@ def _goalkeepers(csv_path, goals_csv, candidates):
 
 
 def _distribution_team(frame_state_csv, keeper, team_of, max_gap):
-    """A keeper's team: where their possessions go next (mostly teammates)."""
+    """Keeper's team = the team they pass to most."""
     if not frame_state_csv or not Path(frame_state_csv).exists():
         return None, 0
     fs = pd.read_csv(frame_state_csv)
@@ -383,7 +372,7 @@ def _distribution_team(frame_state_csv, keeper, team_of, max_gap):
 
 
 def assign_teams_by_kit(report, csv_path, goals_csv=None, frame_state_csv=None, fps=30.0):
-    """Teams from the identity resolver's kit groups; None if they don't show two teams."""
+    """Teams from the resolver's kit groups. None if there aren't two clear kits."""
     ids = report.get("identity_detail") or []
     det_by_kit = defaultdict(int)
     for x in ids:
@@ -391,7 +380,7 @@ def assign_teams_by_kit(report, csv_path, goals_csv=None, frame_state_csv=None, 
     kits = sorted(det_by_kit, key=lambda k: -det_by_kit[k])
     if len(kits) < 2 or det_by_kit[kits[1]] < 0.25 * det_by_kit[kits[0]]:
         return None
-    low, high = sorted(kits[:2])  # lower hue -> team_a, stable across runs
+    low, high = sorted(kits[:2])  # lower hue = team_a so it's the same every run
     kit_team = {low: TEAM_A, high: TEAM_B}
 
     assignments = {}
@@ -482,7 +471,7 @@ def write_team_swatches(rows, reps, output_path):
 
 
 def write_team_overlay_video(csv_path, video_path, assignments, output_path, max_frames=None):
-    """Draw person boxes coloured by assigned team. No YOLO."""
+    """Debug video with boxes coloured by team."""
     df = pd.read_csv(csv_path)
     people = df[df["class"] == PERSON_CLASS].copy()
     people = people.dropna(subset=["stable_id"])

@@ -1,8 +1,6 @@
 """
-Thin MVP pipeline: tracking CSV → MotionEngine analytics → heatmaps.
-
-Default grouping is stable_id when that column exists and has values.
-MotionEngine still defaults to track_id for older tests/scripts.
+Runs the whole analysis for one video: tracking, possession, teams, events,
+match stats and the analysis video.
 """
 
 from __future__ import annotations
@@ -52,7 +50,7 @@ def _format_tag_number(value):
 
 
 def segment_suffix(start_time, duration):
-    """Empty for a full-video run (start 0, no duration)."""
+    """Suffix for output files, empty for a full video."""
     start_time = float(start_time or 0)
     if start_time == 0 and duration is None:
         return ""
@@ -107,10 +105,7 @@ def _video_fps_and_shape(video_path: Path):
 
 
 def choose_identity_column(csv_path: Path):
-    """
-    Use stable_id when the coordinate CSV has non-empty values.
-    Fall back to track_id for older CSVs without identity.
-    """
+    """stable_id if the CSV has it, otherwise track_id (old CSVs)."""
     df = pd.read_csv(csv_path)
     if "stable_id" in df.columns:
         values = df["stable_id"].dropna()
@@ -149,7 +144,7 @@ def _frames_detected(motion: MotionEngine, player_id) -> int:
 
 
 def _finite_points(points):
-    """Drop NaN coordinates from short tracks (rolling smooth + fill)."""
+    """Drop NaN points."""
     cleaned = []
     for x, y in points:
         if x is None or y is None:
@@ -287,8 +282,7 @@ def run_mvp(
     if not csv_path.exists():
         raise FileNotFoundError(f"Coordinate CSV was not created: {csv_path}")
 
-    # Shots/goals are measured against goals detected in the video; without
-    # a goal track (goal model not installed) they are not measured.
+    # no goals file = goal model isn't installed, so skip shots
     summary_path = camera_summary_path(csv_path)
     camera_motion = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else None
     goals_csv = goals_path(csv_path)

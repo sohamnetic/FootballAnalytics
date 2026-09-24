@@ -1,4 +1,4 @@
-"""Lightweight on-disk match index for the local product prototype."""
+"""Keeps the list of matches in a JSON file."""
 
 from __future__ import annotations
 

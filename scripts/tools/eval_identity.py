@@ -1,16 +1,15 @@
 """
-Score a coordinate CSV's stable_id against hand-verified identity points.
+Check the player ids in a coordinates CSV against hand-labelled points.
 
-Ground truth (data/identity_gt/*.csv) is `frame,x,y,label`: at that frame,
-the person whose box contains (x, y) is `label`. It is keyed by position,
-not tracker id, so it stays valid when detector/tracker settings change.
+The ground truth file has frame,x,y,label rows (the person at that spot is
+`label`), so it still works if the tracker changes.
 
   python -m scripts.tools.eval_identity \
       --csv outputs/coordinates/match_t200_d40.csv \
       --gt data/identity_gt/match_t200_d40.csv
 
-Pairwise over GT points: precision = same stable_id pairs that are truly
-the same player; recall = same-player pairs that got the same stable_id.
+Precision = pairs with the same id that really are the same player.
+Recall = pairs of the same player that got the same id.
 """
 import argparse
 from itertools import combinations
@@ -32,8 +31,7 @@ def evaluate(csv_path, gt_path):
         if rows is not None:
             inside = rows[(rows.x1 <= p.x) & (p.x <= rows.x2) & (rows.y1 <= p.y) & (p.y <= rows.y2)]
             if len(inside):
-                # GT points are box centres: with overlapping players, the
-                # nearest centre is the person the point was placed on
+                # points were placed on box centres, so take the closest box
                 dist = ((inside.x1 + inside.x2) / 2 - p.x) ** 2 + ((inside.y1 + inside.y2) / 2 - p.y) ** 2
                 hit = inside.loc[dist.idxmin(), "stable_id"]
         if hit is None or pd.isna(hit):

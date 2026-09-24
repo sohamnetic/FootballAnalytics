@@ -1,26 +1,20 @@
 """
-Auto-label goal frames (posts + net) in a match video for training the goal
-detector (scripts/tools/train_goal_detector.py).
+Make training data for the goal detector from a match video.
 
-Grounding DINO (zero-shot, text prompt) proposes boxes on frames sampled
-every --every-s seconds. Its scores are low and it also boxes penalty areas,
-stands, doors and wall panels, so a box becomes a label only if it:
-  - has a goal-like size (not a large region of the frame),
-  - looks like a goal to CLIP: the crop is classified against "door", "wall",
-    "people in the stands", ... (close-ups of a net score lower, so they
-    also pass with a confident Grounding DINO score),
-  - stands on the turf (doors and wall panels are behind the boards),
-  - is the tightest box around it (a penalty area that contains the goal
-    also looks like a goal to CLIP), and
-  - is confirmed over time: goals don't move, so after compensating for the
-    camera pan/zoom the same box must be found on nearby sampled frames.
-A frame with no goal-like proposal at all, and no confirmed goal nearby that
-should be in view, is kept as a background (no goal) example. Anything in
-between is left out rather than guessed.
+Grounding DINO finds goal-like boxes every --every-s seconds. It also
+boxes a lot of other stuff (penalty areas, doors, walls, the crowd), so a
+box is only kept if:
+- it's not too big
+- CLIP agrees it looks like a goal
+- there's turf right under it
+- it's not just a bigger box around another goal box
+- we find the same box again in nearby frames (goals don't move)
 
-Dev-only: needs `pip install transformers` and downloads the Grounding DINO
-and CLIP weights from Hugging Face on first run. The pipeline itself only uses the
-trained YOLO model.
+Frames with nothing goal-like are saved as "no goal" examples. Anything
+unclear is skipped. Check the labels by eye before training and pass bad
+frames with --drop-frames.
+
+Needs `pip install transformers` (only for this tool).
 
   python -m scripts.tools.label_goals --video path/to/match.mp4 \
       --out data/goal_dataset --name match5min
@@ -55,7 +49,7 @@ NEGATIVE_WINDOW_S = 1.0
 
 
 def _map_box(box, t):
-    """Axis-aligned box through a similarity transform."""
+    """Apply a camera transform to a box."""
     x1, y1, x2, y2 = box
     pts = np.array([[x1, y1, 1], [x2, y1, 1], [x1, y2, 1], [x2, y2, 1]], float) @ t.T
     return [pts[:, 0].min(), pts[:, 1].min(), pts[:, 0].max(), pts[:, 1].max()]
@@ -126,19 +120,19 @@ def propose(video, every_s, model_name, image_dir, name, start_s=0.0, duration_s
 
 
 def _turf_below(img, box):
-    """Turf share of a strip under the middle of the box's bottom edge."""
+    """How much turf is right below the box."""
     h, w = img.shape[:2]
     x1, y1, x2, y2 = box
     bh, bw = y2 - y1, x2 - x1
     strip = img[int(max(0, y2 - 0.03 * bh)):int(min(h, y2 + 0.12 * bh)),
                 int(max(0, x1 + 0.2 * bw)):int(min(w, x2 - 0.2 * bw))]
     if strip.size == 0:
-        return 1.0  # bottom edge is off the frame: can't tell, don't reject
+        return 1.0  # bottom is outside the frame, don't reject it
     return float(turf_mask(cv2.cvtColor(strip, cv2.COLOR_BGR2HSV).reshape(-1, 3)).mean())
 
 
 def verify(proposals, device=None):
-    """Per goal-like box: CLIP goal probability (box[5]) and turf below it (box[6])."""
+    """Add the CLIP goal score (box[5]) and turf below (box[6]) to each box."""
     import torch
     from PIL import Image
     from transformers import CLIPModel, CLIPProcessor
@@ -187,7 +181,7 @@ def _contains(outer, inner):
 
 
 def decide(proposals):
-    """Label each sampled frame: goal boxes, background, or skip."""
+    """Decide for each frame: goal, background or skip."""
     fps, width, height = proposals["fps"], proposals["width"], proposals["height"]
     samples = proposals["samples"]
     for s in samples:
@@ -196,7 +190,7 @@ def decide(proposals):
             {"box": b[:4], "score": b[4], "stab": _map_box(b[:4], t), "goal": _looks_like_goal(b)}
             for b in s["boxes"] if _goal_like(b[:4], width, height)
         ]
-        # a box around a tighter goal box is the area around the goal
+        # drop boxes that contain a smaller goal box
         for c in s["cands"]:
             if c["goal"] and any(o is not c and o["goal"] and _contains(c["box"], o["box"]) for o in s["cands"]):
                 c["goal"] = False
@@ -224,8 +218,7 @@ def decide(proposals):
             s["label"] = "goal"
             s["goals"] = [k["box"] for k in keep]
             continue
-        # background only if nothing goal-like was proposed and no confirmed
-        # goal on a nearby frame should be visible here
+        # only call it background if no goal should be visible here
         t_inv = np.linalg.inv(np.array(s["transform"]))
         near = np.flatnonzero(np.abs(frames - s["frame"]) <= NEGATIVE_WINDOW_S * fps)
         expected = False
@@ -235,7 +228,7 @@ def decide(proposals):
                     x1, y1, x2, y2 = _map_box(c["stab"], t_inv)
                     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
                     expected |= 0 <= cx < width and 0 <= cy < height
-        # boxes CLIP calls a wall/door/crowd don't block a background label
+
         doubtful = any(c["goal"] or c["score"] >= STRONG for c in s["cands"])
         s["label"] = "skip" if (doubtful or expected) else "background"
         s["goals"] = []
@@ -243,8 +236,7 @@ def decide(proposals):
 
 
 def write_dataset(samples, width, height, out, val_every_s, fps):
-    """YOLO layout; validation = every 5th block of val_every_s seconds (no
-    near-duplicate frames shared between train and val)."""
+    """Write images + labels in YOLO format. Every 5th 30s block goes to val."""
     counts = {"goal": 0, "background": 0, "skip": 0}
     for s in samples:
         counts[s["label"]] += 1

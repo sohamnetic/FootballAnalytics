@@ -1,29 +1,21 @@
 """
-Offline identity resolution: raw tracker tracklets -> player identities.
+Join tracker fragments into players, after tracking is done.
 
-Online trackers (ByteTrack) fragment a player every time they are occluded,
-missed by the detector for too long, or leave the view while the camera
-pans - 90-110 fragments for ~13 people on a 40s clip. This module works on
-the whole clip at once, after tracking:
+ByteTrack gives a player a new id every time they get blocked, missed or
+leave the frame, so a 40s clip ends up with ~100 ids for 13 people.
 
-1. Player gate: a tracklet is a player only if the person stands on turf
-   and wears a saturated kit colour. Removes spectators, bench, staff and
-   false detections (boards, netting), which the fixed-pixel pitch polygon
-   could not do on a panning camera.
-2. Kit group: dominant torso hue (turf pixels excluded). Different kits
-   never merge.
-3. Constrained agglomerative clustering. Cost = average-linkage person-ReID
-   distance, minus a bonus when jersey-number OCR agrees, plus a penalty
-   when the camera-motion-compensated position jump between consecutive
-   fragments is implausible. Hard cannot-links: two tracklets that are
-   visible at the same time as clearly different boxes, different kit
-   groups, and confidently different jersey numbers.
-   Phase 1 merges while cost < IDENTITY_MERGE_COST. Phase 2 keeps merging
-   a kit group (up to IDENTITY_FORCED_MERGE_COST) only while it still has
-   more identities than the most players of that kit ever seen at once.
+Steps:
+1. drop anyone who isn't a player (not on the turf or no kit colour) -
+   spectators, bench, staff, false detections
+2. group by kit colour, different kits never merge
+3. merge fragments bottom-up. Cost is ReID distance, with a bonus when
+   the shirt numbers match and a penalty when the jump in position doesn't
+   make sense. Never merge two fragments that are on screen at the same
+   time, or that have clearly different numbers.
+   After the normal merges, a kit keeps merging (with a looser limit) while
+   it has more ids than players we ever saw at once in that kit.
 
-Identities are still an estimate: same-kit teammates with no readable
-number are separated by ReID + motion only. See docs/architecture.md.
+Teammates without a readable number can still get mixed up.
 """
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -71,9 +63,9 @@ class Tracklet:
 
 @dataclass
 class Resolution:
-    identity_of: dict                       # track_id -> identity (players only)
+    identity_of: dict                       # track_id -> player id
     tracklets: dict                         # track_id -> Tracklet
-    headcount: dict                         # kit bin -> max concurrent players
+    headcount: dict                         # kit -> most players seen at once
     merges: list = field(default_factory=list)
 
     def report(self):
@@ -115,15 +107,14 @@ class Resolution:
 
 
 def normalize_number(text):
-    # 1 and 7 are the dominant OCR confusion on jersey fonts (#10 read as 70)
+    # OCR mixes up 1 and 7 a lot on shirts (10 -> 70)
     return text.replace("7", "1")
 
 
 def rank_number_votes(weights):
     """
-    weights: {normalized number: summed OCR confidence}.
-    Returns (number, support, rival): partial reads ("2" of "12") add half
-    their weight to the longer number; rival is the best incompatible read.
+    Pick the most likely number from OCR votes {number: total confidence}.
+    Partial reads like "2" for "12" count half. Returns (number, support, rival).
     """
     if not weights:
         return None, 0.0, 0.0
@@ -135,8 +126,7 @@ def rank_number_votes(weights):
 
 
 def _tracklet_number(reads):
-    """(number, support, strong). Usable numbers earn a merge bonus; only
-    strong ones may veto a merge, since a false veto splits a player."""
+    """Returns (number, support, strong). Only strong numbers can block a merge."""
     weights = defaultdict(float)
     for text, conf in reads:
         if conf >= IDENTITY_OCR_MIN_CONF:
@@ -148,8 +138,7 @@ def _tracklet_number(reads):
 
 
 def _number_relation(nums_a, nums_b):
-    """nums_*: {number: strong}. -1 conflict (both strong, incompatible),
-    2 same full number, 1 compatible partial, 0 no usable evidence."""
+    """-1 = different numbers, 2 = same number, 1 = partial match, 0 = don't know."""
     rel = 0
     for a, strong_a in nums_a.items():
         for b, strong_b in nums_b.items():
@@ -222,7 +211,7 @@ def _real_overlap_frames(rows, a, b):
     iy = np.clip(np.minimum(A[:, 3], B[:, 3]) - np.maximum(A[:, 1], B[:, 1]), 0, None)
     inter = ix * iy
     union = (A[:, 2] - A[:, 0]) * (A[:, 3] - A[:, 1]) + (B[:, 2] - B[:, 0]) * (B[:, 3] - B[:, 1]) - inter
-    # overlapping boxes of the same size/place are a duplicate or merged box, not two people
+    # almost the same box = duplicate detection, not two people
     return int(((inter / np.maximum(union, 1.0)) < _OVERLAP_IOU_SAME_BOX).sum())
 
 
@@ -236,7 +225,7 @@ def _headcount(players, rows, fps):
         support = defaultdict(int)
         for c in counts.values():
             support[c] += 1
-        # a headcount must hold for ~0.25s, not a one-frame duplicate box
+        # needs to last ~0.25s so one bad frame doesn't count
         stable = [c for c, frames in support.items() if frames >= max(1, int(0.25 * fps))]
         out[kit] = max(stable) if stable else max(support)
     return out
@@ -261,7 +250,7 @@ def resolve_identities(features, fps):
             conflict[i, j] = conflict[j, i] = c
     np.fill_diagonal(conflict, True)
 
-    # cluster state, indexed by the position of the cluster's first tracklet
+    # clusters
     members = {i: [i] for i in range(n)}
     sums = E.copy()
     counts = has.copy()
@@ -269,14 +258,14 @@ def resolve_identities(features, fps):
     active = np.ones(n, bool)
     blocked = np.zeros((n, n), bool)
 
-    # average-linkage appearance distance; only a merged cluster's row changes
+    # only the merged cluster's row needs updating
     centroids = np.zeros_like(sums)
     np.divide(sums, counts[:, None], out=centroids, where=counts[:, None] > 0)
     app = 1.0 - centroids @ centroids.T
     app[counts == 0, :] = 1.0
     app[:, counts == 0] = 1.0
 
-    # jersey-number relation (-1 conflict, 1 partial, 2 same), sparse in practice
+    # shirt number relation between clusters
     rel = np.zeros((n, n), np.int8)
     numbered = [i for i in range(n) if nums[i]]
     for x, i in enumerate(numbered):

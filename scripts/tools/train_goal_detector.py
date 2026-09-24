@@ -1,11 +1,9 @@
 """
-Fine-tune YOLO11n to find goals (posts + net) on frames labelled by
-scripts/tools/label_goals.py, and install it as config.GOAL_MODEL.
+Train the goal detector on data from label_goals.py and copy it to
+models/goal_yolo11n.pt.
 
-Heavy colour/scale augmentation stands in for venue variety: goals look
-alike everywhere (white frame, net), but backgrounds, lighting and camera
-distance don't. Label more venues with label_goals.py into the same dataset
-and re-run this to generalise further.
+Lots of colour/scale augmentation since we only have one venue so far.
+Add videos from other venues to the dataset and train again.
 
   python -m scripts.tools.train_goal_detector --data data/goal_dataset/data.yaml
 """

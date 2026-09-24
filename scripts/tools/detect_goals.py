@@ -1,7 +1,6 @@
 """
-Re-run goal detection for an existing coordinate CSV (no re-tracking), e.g.
-after retraining the goal model. Writes <coordinate stem>_goals.csv, the same
-file scripts/track.py produces.
+Run goal detection again for an existing coordinates CSV (e.g. after
+retraining the goal model), without redoing the tracking.
 
   python -m scripts.tools.detect_goals --video data/uploads/<id>/video.mp4 \
       --csv outputs/matches/<id>/coordinates/video.csv

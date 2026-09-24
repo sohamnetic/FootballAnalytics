@@ -1,17 +1,15 @@
 """
-Camera motion for a panning/zooming match camera.
+Track how the camera pans and zooms.
 
-Chains frame-to-frame similarity transforms, estimated from background
-optical flow with people masked out, into one transform per frame that maps
-that frame's pixels onto the first frame's pixels. Positions mapped this way
-stay comparable across a pan; raw pixels do not.
+Optical flow on the background (people masked out) gives the movement
+between frames. We chain those so every frame gets a transform back to the
+first frame, which lets us compare positions across a pan.
 """
 import cv2
 import numpy as np
 
 
 class CameraMotion:
-
     def __init__(self, scale=0.5):
         self.scale = scale
         self._prev_gray = None
@@ -38,7 +36,7 @@ class CameraMotion:
                 p1, status, _ = cv2.calcOpticalFlowPyrLK(self._prev_gray, gray, p0, None, **self._lk)
                 good = status.reshape(-1) == 1
                 if good.sum() >= 12:
-                    # current -> previous, in small-image pixels
+                    # current -> previous frame (downscaled)
                     a, _ = cv2.estimateAffinePartial2D(
                         p1[good], p0[good], method=cv2.RANSAC, ransacReprojThreshold=2.0
                     )
@@ -51,9 +49,7 @@ class CameraMotion:
 
 
 def summarize_motion(transforms, width, height):
-    """How much the view moved over the clip: pan range of the image centre
-    (in first-frame pixels) and zoom range. Used to decide whether pixel-space
-    geometry such as fixed goal boxes can be trusted."""
+    """Total pan and zoom over the clip, and whether the camera moved."""
     if not transforms:
         return {"moving": False, "pan_x_px": 0.0, "pan_y_px": 0.0, "zoom_ratio": 1.0}
     centre = np.array([width / 2, height / 2, 1.0])

@@ -10,7 +10,7 @@ import { Card } from "../components/ui/Card";
 import { Spinner } from "../components/ui/Spinner";
 import { cn } from "../lib/cn";
 
-// Mirrors STAGE_PROGRESS in app/jobs.py: progress at which each stage starts.
+// same as STAGE_PROGRESS in app/jobs.py
 const STAGES: [string, number][] = [
   ["Preparing video", 5],
   ["Detecting & tracking players", 12],

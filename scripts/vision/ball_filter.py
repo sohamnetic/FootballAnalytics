@@ -1,20 +1,14 @@
 """
-Pick the real ball out of YOLO "sports ball" candidates.
+Pick the real ball out of the "sports ball" detections.
 
-The detector runs at a low confidence threshold (small indoor ball), so each
-frame can carry fixed look-alikes: a white fitting on the wall netting, a
-round sign by the bench, a whistle. The fitting scores up to 0.6 and used to
-beat the real ball whenever both were in view.
+We run the ball detector with a low threshold, so it also finds things that
+look like a ball (a white fitting on the netting, a water bottle behind the
+goal...). Those never move, so:
 
-Rules, applied after tracking so the whole clip is known:
-  1. Static objects are rejected. An off-turf candidate that stays at the same
-     camera-compensated position for a while is a fixture, not a ball in
-     flight (a real ball off the turf is in the air and moving). On the turf
-     the bar is higher, since a real ball can rest before a restart: a water
-     bottle or cap left by the goal stays put for much longer.
-  2. Remaining off-turf candidates need BALL_OFF_TURF_MIN_CONF.
-  3. Per frame, the best score wins, with a small preference for candidates
-     on the turf.
+1. anything that stays in the same place for a while is thrown out
+   (1 s off the turf, 4 s on it - a real ball can sit still before a restart)
+2. off the turf we need a higher confidence
+3. per frame, highest score wins (small bonus for being on the turf)
 """
 import cv2
 import numpy as np
@@ -22,9 +16,9 @@ import numpy as np
 from config.config import BALL_OFF_TURF_MIN_CONF
 from scripts.vision.turf import turf_mask
 
-_ON_TURF = 0.2            # turf fraction around the ball
-_STATIC_RADIUS_PX = 30.0  # compensated positions this close = "didn't move"
-_STATIC_MIN_S = 1.0       # ...for at least this much time (off the turf)
+_ON_TURF = 0.2            # turf share around the ball
+_STATIC_RADIUS_PX = 30.0  # closer than this = didn't move
+_STATIC_MIN_S = 1.0
 _STATIC_WINDOW_S = 4.0
 _STATIC_ON_TURF_MIN_S = 4.0
 _STATIC_ON_TURF_WINDOW_S = 10.0
@@ -32,7 +26,7 @@ _TURF_PREFERENCE = 0.15
 
 
 def ring_turf_fraction(frame_bgr, x1, y1, x2, y2):
-    """Share of turf pixels in a square around the ball (2.5 ball widths)."""
+    """How much of the area around the ball is turf."""
     h, w = frame_bgr.shape[:2]
     size = max(x2 - x1, y2 - y1, 6)
     cx, cy, r = (x1 + x2) // 2, (y1 + y2) // 2, int(2.5 * size)
@@ -43,8 +37,7 @@ def ring_turf_fraction(frame_bgr, x1, y1, x2, y2):
 
 
 def _static(idx, frames, stab, window, need):
-    """Candidates in idx that sit at one compensated position for `need`
-    frames (half of them detected) within +-window frames."""
+    """Mark candidates that sit in one spot for at least `need` frames."""
     static = np.zeros(len(frames), bool)
     idx = idx[np.argsort(frames[idx], kind="stable")]
     sorted_frames = frames[idx]
@@ -60,11 +53,7 @@ def _static(idx, frames, stab, window, need):
 
 
 def select_balls(candidates, camera, fps):
-    """
-    candidates: list of dicts frame, confidence, x1, y1, x2, y2, turf.
-    camera: {frame: 3x3 transform to first-frame pixels}.
-    Returns ({frame: chosen candidate}, stats).
-    """
+    """Returns ({frame: best candidate}, stats)."""
     if not candidates:
         return {}, {"candidates": 0, "static_rejected": 0, "low_conf_off_turf": 0, "frames_with_ball": 0}
 

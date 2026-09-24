@@ -4,8 +4,8 @@ type Path = { x: number[]; y: number[] };
 
 const DURATION = 12;
 
-// Each player loops through a few positions; the ball is passed between
-// players at the same keyframe times so it always lands on someone.
+// players move between a few spots, the ball is passed at the same times
+// so it always ends up at someone's feet
 const RED: Path[] = [
   { x: [120, 150, 135, 120], y: [190, 170, 215, 190] },
   { x: [210, 245, 230, 210], y: [110, 130, 95, 110] },

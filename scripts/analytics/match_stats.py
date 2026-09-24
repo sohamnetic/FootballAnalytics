@@ -1,9 +1,4 @@
-"""
-Product data layer: unify MVP event CSVs into one match-stats payload.
-
-Does not modify tracking, identity, ball detection, or event engines.
-stable_id is an MVP identity, not a guaranteed real-world player.
-"""
+"""Combines all the event CSVs into the match_stats.json the website reads."""
 
 from __future__ import annotations
 
@@ -22,8 +17,7 @@ from scripts.analytics.events.passes import VALID_TEAMS, _confirmed_intervals, _
 
 ANALYTICS_DIR = OUTPUT_DIR / "analytics"
 PIPELINE_VERSION = "mvp-product-data-v1"
-# Offline resolution (scripts/identity/resolver.py) merges tracker fragments into
-# one id per player; without it, stable_id is the fragmented online id.
+
 IDENTITY_QUALITY = "RESOLVED_ESTIMATE" if IDENTITY_RESOLVER_ENABLED else "MVP_FRAGMENTED"
 
 SHOTS_NOT_MEASURED = (
@@ -135,10 +129,7 @@ def _clip_duration_s(frame_df, fps, start_time_s, duration_s):
 
 
 def _possession_seconds(frame_df, fps):
-    """
-    Confirmed possession duration from frame count / actual FPS.
-    Also returns interval/transition counts from confirmed runs.
-    """
+    """Possession time per player, plus number of spells and changes."""
     by_player = defaultdict(float)
     by_team_frames = defaultdict(int)
     state_frames = defaultdict(int)
@@ -193,7 +184,7 @@ def build_match_stats(
     passes_df = _dedupe_events(_read_csv_or_empty(passes_csv))
     intercepts_df = _dedupe_events(_read_csv_or_empty(interceptions_csv))
     recoveries_df = _dedupe_events(_read_csv_or_empty(recoveries_csv))
-    # Unmeasured shots must not fall back to a stale shots CSV in the folder.
+    # ignore any old shots file if shots weren't measured
     shots_df = _dedupe_events(_read_csv_or_empty(shots_csv)) if shots_measured else pd.DataFrame()
 
     inconsistencies = []

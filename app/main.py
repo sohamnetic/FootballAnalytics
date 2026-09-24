@@ -87,9 +87,7 @@ def current_user(
 
 
 def _first_analysis_video(match_id: str) -> Path | None:
-    """The H.264 analysis video (scripts/analytics/analysis_video.py). The
-    per-stage debug overlays are MPEG-4 Part 2, which browsers can't play,
-    so they are never offered to the dashboard."""
+    """The analysis video, if it was made (the old debug videos don't play in browsers)."""
     videos = sorted((match_output_dir(match_id) / "analysis").glob("analysis_video*.mp4"))
     videos = [v for v in videos if not v.name.endswith(".part.mp4") and v.is_file()]
     return videos[0] if videos else None

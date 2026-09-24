@@ -9,7 +9,7 @@ async function enableDemoApi() {
   const { setupWorker } = await import("msw/browser");
   const { handlers } = await import("./mocks/handlers");
   await setupWorker(...handlers).start({ onUnhandledRequest: "bypass", quiet: true });
-  // Demo mode starts signed in so every page can be explored without an account.
+  // demo mode: already logged in
   if (!getToken()) setToken("demo-token");
 }
 

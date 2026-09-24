@@ -18,36 +18,23 @@ from config.config import (
 from scripts.identity.player_profile import PlayerProfile
 from scripts.vision.jersey_color import JerseyColorExtractor
 
-# Rough real-world player height used only to keep the height-ratio sanity
-# gate meaningful; not a calibrated homography (none exists on this
-# pipeline's event path - see docs/architecture.md).
+# rough player height, only used for the height check
 _REFERENCE_HEIGHT_M = 1.75
 
 
 class IdentityManager:
     """
-    Maintains stable player identities throughout a football match.
+    Keeps a stable id for each player while the tracker ids keep changing.
 
-    Rematch combines:
-      - an adaptive, gap-scaled position gate (grows with elapsed frames,
-        capped so a long gap can't match across implausible distances),
-      - a two-region jersey-colour histogram appearance gate (soft/hard
-        rejection only once the gap is long enough that position alone
-        is unreliable),
-      - a cheap bbox-height-ratio sanity gate.
+    When a new track appears we try to match it to a player we lost recently:
+    - distance allowed grows with the time they were gone (up to a max)
+    - for longer gaps the shirt colour has to match too
+    - box height can't be too different
 
-    All three are rejection signals, not a positive unique-player proof:
-    two players on the same team in similar shirts can still be confused.
-    `stable_id` remains MVP tracking identity, not a unique real-world
-    player (see docs/architecture.md - Identity).
+    Teammates with the same shirt can still get confused.
 
-    Call `start_new_frame()` once per video frame, then either:
-      - `assign_frame(frame_number, detections, frame=None)` for a whole
-        frame's detections at once (used by scripts/track.py - resolves
-        multiple new tracks in one frame with a single global assignment
-        instead of first-come-first-served), or
-      - `get_stable_id(track_id, frame_number, position, bbox, frame=None)`
-        for one detection at a time (kept for standalone/manual use).
+    Call start_new_frame() every frame, then assign_frame() with all the
+    detections of that frame (or get_stable_id() for one at a time).
     """
 
     def __init__(
@@ -244,15 +231,13 @@ class IdentityManager:
         self.update_player(stable_id, frame_number, position, bbox, frame=frame)
 
     # ==========================================================
-    # Candidate scoring (shared by get_stable_id and assign_frame)
+    # Candidate scoring
     # ==========================================================
 
     def _score_candidates(self, frame_number, position, bbox, descriptor, new_track_id):
         """
-        Returns a list of (score, stable_id, gap, dist, allowed, ratio, hd)
-        for every stable_id that passes all gates, sorted best-first
-        (lowest score = tightest fit relative to its allowed radius).
-        Also logs rejections via _log_rematch_event.
+        Lost players this track could be, best match first.
+        Returns (score, stable_id, gap, dist, allowed, ratio, hd) tuples.
         """
         height = bbox[3] - bbox[1]
         candidates = []
@@ -307,22 +292,17 @@ class IdentityManager:
         return candidates
 
     # ==========================================================
-    # Per-frame batch assignment (preferred; used by scripts/track.py)
+    # Whole frame at once
     # ==========================================================
 
     def assign_frame(self, frame_number, detections, frame=None):
         """
-        Resolve stable_ids for every detection in one video frame at once.
+        Get stable ids for all detections in a frame. Doing the whole frame
+        together means if two new tracks could be the same lost player,
+        the closer one gets it.
 
-        `detections`: list of dicts with keys `track_id`, `position`
-        ((x, y) feet point), `bbox` ((x1, y1, x2, y2)).
-
-        Matching a whole frame together (instead of one detection at a
-        time) avoids a first-come-first-served bias: if two new tracks
-        could both plausibly be the same missing player, the globally
-        closer one wins, not whichever box YOLO happened to return first.
-
-        Returns {track_id: stable_id}.
+        detections: list of dicts with track_id, position (feet), bbox
+        Returns {track_id: stable_id}
         """
         results = {}
         pending = []
@@ -380,7 +360,7 @@ class IdentityManager:
         return results
 
     # ==========================================================
-    # Single-detection convenience API (standalone / manual use)
+    # One detection at a time
     # ==========================================================
 
     def get_stable_id(self, track_id, frame_number, position, bbox, frame=None):

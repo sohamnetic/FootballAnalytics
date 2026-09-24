@@ -6,7 +6,7 @@ export interface MatchInfo {
   duration_s: number | null;
   fps: number;
   clip_duration_used_s?: number;
-  /** Display colours of each team's kit, as drawn in the analysis video. */
+  // team kit colours used in the analysis video
   kit_colors?: { team_a?: string; team_b?: string } | null;
   team_a_name?: string;
   team_b_name?: string;
@@ -17,7 +17,7 @@ export interface MatchInfo {
 export interface TeamStats {
   possession_percentage: number | null;
   possession_seconds?: number | null;
-  // null when shots/goals could not be measured (moving camera)
+  // null = not measured
   goals: number | null;
   shots: number | null;
   shots_on_target: number | null;

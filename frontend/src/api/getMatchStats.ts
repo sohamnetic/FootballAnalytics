@@ -35,8 +35,7 @@ export interface UploadResult {
   bytes: number;
 }
 
-// XMLHttpRequest rather than fetch: fetch cannot report upload progress, and
-// match files can be several GB.
+// using XHR because fetch can't show upload progress (videos are big)
 export function uploadMatchVideo(file: File, onProgress?: (fraction: number) => void): Promise<UploadResult> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();

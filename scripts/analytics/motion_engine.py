@@ -4,22 +4,13 @@ import pandas as pd
 
 class MotionEngine:
     """
-    Pixel-space motion stats from a coordinate CSV.
+    Movement stats per player (in pixels) from a coordinates CSV.
 
-    identity_column:
-        Column used to group a player. Default is "track_id" so existing
-        tests keep working. The MVP pipeline passes "stable_id" when that
-        column has values.
-
-    Same-frame duplicates:
-        IdentityManager can assign the same stable_id to two ByteTrack IDs
-        in one frame (old ID still present after a rematch). Those rows are
-        reduced to the highest-confidence detection per frame, then sorted
-        by frame so trajectory / distance / speed stay chronological.
+    identity_column is "track_id" by default, the pipeline uses "stable_id".
+    If a player shows up twice in one frame we keep the most confident box.
     """
 
     def __init__(self, csv_path, fps, identity_column="track_id"):
-
         self.df = pd.read_csv(csv_path)
         self.fps = fps
         self.identity_column = identity_column
@@ -31,7 +22,6 @@ class MotionEngine:
             )
 
     def _player_rows(self, player_id):
-
         player = self.df[self.df[self.identity_column] == player_id].copy()
 
         if player.empty:
@@ -58,7 +48,6 @@ class MotionEngine:
     # --------------------------
 
     def get_trajectory(self, player_id):
-
         player = self._player_rows(player_id)
 
         return list(
@@ -73,7 +62,6 @@ class MotionEngine:
     # --------------------------
 
     def get_smoothed_trajectory(self, player_id, window=5):
-
         player = self._player_rows(player_id)
 
         player["smooth_x"] = (
@@ -102,7 +90,6 @@ class MotionEngine:
     # --------------------------
 
     def get_distance(self, player_id):
-
         points = self.get_smoothed_trajectory(player_id)
 
         distance = 0
@@ -121,7 +108,6 @@ class MotionEngine:
     # --------------------------
 
     def get_speed(self, player_id):
-
         points = self.get_smoothed_trajectory(player_id)
 
         dt = 1 / self.fps
@@ -140,7 +126,6 @@ class MotionEngine:
         return speeds
 
     def get_all_players(self):
-
         values = self.df[self.identity_column].dropna()
         values = values[values.astype(str).str.strip() != ""]
 

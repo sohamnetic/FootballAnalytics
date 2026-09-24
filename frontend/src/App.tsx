@@ -7,7 +7,7 @@ import { RequireAuth } from "./auth/RequireAuth";
 import { FullPageStatus } from "./components/layout/PageShell";
 import { HomePage } from "./pages/HomePage";
 
-// Everything past the landing page loads on demand (the dashboard pulls in charts).
+// lazy load the other pages
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const LoginPage = lazy(() => import("./pages/LoginPage").then((m) => ({ default: m.LoginPage })));
 const MatchesPage = lazy(() => import("./pages/MatchesPage").then((m) => ({ default: m.MatchesPage })));

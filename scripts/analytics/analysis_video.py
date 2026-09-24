@@ -1,19 +1,12 @@
 """
-The match video with the analysis drawn on it, for the dashboard.
+Makes the "Tracking" video for the dashboard.
 
-One browser-playable H.264 file (OpenCV's own mp4 writer produces MPEG-4
-Part 2, which browsers can't play), drawn from the pipeline's outputs:
+Draws players (in their team colour, with the same ids as the stats page),
+the ball, the goals, who has the ball, possession so far and captions for
+passes/shots/etc on top of the match.
 
-  - every player: a ring at the feet and an ID tag in their team's kit
-    colour (referee yellow, unknown grey); IDs are the dashboard's IDs
-  - the player on the ball: a marker above the head
-  - the ball (hollow when interpolated between detections)
-  - the goals the shot detector used
-  - a clock and a running possession bar
-  - a caption for each event: pass, interception, recovery, shot, goal
-
-Frames are piped to ffmpeg (libx264). Without ffmpeg the video is skipped
-and the dashboard shows only the uploaded footage.
+We pipe frames into ffmpeg to get H.264, because the mp4 files OpenCV
+writes don't play in browsers. No ffmpeg = no video.
 """
 from __future__ import annotations
 
@@ -46,7 +39,7 @@ def ffmpeg_path():
 
 
 def _events(events_dir, tag):
-    """[(frame, text, team or None)] from the event CSVs."""
+    """All events as (frame, caption, team), sorted."""
     out = []
 
     def rows(name):
@@ -70,7 +63,7 @@ def _events(events_dir, tag):
 
 
 def _label(img, text, x, y, bg, scale, thick=1, pad=4):
-    """Filled tag with centred text, bottom-centre at (x, y)."""
+    """Draw a small label above (x, y)."""
     (w, h), base = cv2.getTextSize(text, FONT, scale, thick)
     x1, y1 = int(x - w / 2 - pad), int(y - h - base - 2 * pad)
     x2, y2 = int(x + w / 2 + pad), int(y)
@@ -91,7 +84,7 @@ def render_analysis_video(
     team_colors,
     tag="",
 ):
-    """team_colors: {"team_a": (b, g, r), "team_b": (b, g, r)}. Returns the path, or None."""
+    """Returns the output path, or None if it couldn't be made."""
     ffmpeg = ffmpeg_path()
     if not ffmpeg:
         print("Analysis video skipped: ffmpeg not found (set FA_FFMPEG or add ffmpeg to PATH).")
@@ -158,7 +151,7 @@ def render_analysis_video(
             overlay = img.copy()
             for x1, y1, x2, y2 in goals.get(frame_no, ()):
                 cv2.rectangle(overlay, (int(x1 * s), int(y1 * s)), (int(x2 * s), int(y2 * s)), WHITE, 2, cv2.LINE_AA)
-            # feet rings, drawn translucent
+            # rings under the players (a bit transparent)
             for sid, x1, y1, x2, y2 in by_frame.get(frame_no, ()):
                 if pd.isna(sid):
                     continue
@@ -191,7 +184,7 @@ def render_analysis_video(
                 caption_until = frame_no + int(CAPTION_S * fps)
                 ev_i += 1
 
-            # HUD: clock + possession so far
+            # clock + possession box, top left
             secs = (frame_no - 1) / fps
             pad = int(12 * out_w / 1280)
             bar_w, bar_h = int(220 * out_w / 1280), int(8 * out_w / 1280)
@@ -199,7 +192,7 @@ def render_analysis_video(
             box[:] = (box * 0.35).astype(np.uint8)
             cv2.putText(img, f"{int(secs // 60):02d}:{int(secs % 60):02d}", (2 * pad, pad + int(24 * out_w / 1280)),
                         FONT, hud_scale, WHITE, 1, cv2.LINE_AA)
-            # possession so far: each side's share over its colour
+
             total = held["team_a"] + held["team_b"]
             share = held["team_a"] / total if total else 0.5
             color_a = team_colors.get("team_a", UNKNOWN_BGR)

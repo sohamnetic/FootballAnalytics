@@ -1,15 +1,11 @@
 """
-Where the goals are, frame by frame, for a panning/zooming camera.
+Goal detection.
 
-A YOLO model fine-tuned on goal frames (posts + net; see
-scripts/tools/label_goals.py and train_goal_detector.py) runs every
-GOAL_DETECT_EVERY_S. Goals never move, so detections from the surrounding
-GOAL_SMOOTH_WINDOW_S are carried into each frame through the camera
-transforms and merged: one missed or spurious detection doesn't make a goal
-blink in or out, and frames between detections still get a box.
+Runs our trained YOLO goal model every few frames. The goals don't move,
+so we use the camera motion to move nearby detections into each frame and
+average them. That fills the frames in between and ignores one-off misses.
 
-Output (<coordinate stem>_goals.csv): frame, x1, y1, x2, y2, confidence,
-support. A frame with no row has no goal in view.
+Writes <coordinates name>_goals.csv with one row per goal per frame.
 """
 from pathlib import Path
 
@@ -38,7 +34,6 @@ def goal_model_available():
 
 
 class GoalDetector:
-
     def __init__(self, device):
         from ultralytics import YOLO
 
@@ -58,11 +53,11 @@ class GoalDetector:
 
 
 def _map_boxes(boxes, t):
-    """(n, 4) axis-aligned boxes through 3x3 similarity transforms."""
+    """Apply a camera transform to boxes."""
     x1, y1, x2, y2 = boxes.T
     corners = np.stack([
         np.stack([x1, y1], 1), np.stack([x2, y1], 1), np.stack([x1, y2], 1), np.stack([x2, y2], 1),
-    ], 1)  # n, 4, 2
+    ], 1)
     pts = corners @ t[:2, :2].T + t[:2, 2]
     return np.concatenate([pts.min(1), pts.max(1)], 1)
 
@@ -77,15 +72,14 @@ def _iou(a, b):
 
 def smooth_goals(detections, camera, fps, width, height):
     """
-    detections: {frame: [[x1, y1, x2, y2, conf], ...]} on detection frames.
-    camera: {frame: 3x3 transform, that frame's pixels -> first-frame pixels}.
-    Returns rows for every tracked frame that has a goal in view.
+    detections: {frame: [[x1, y1, x2, y2, conf], ...]}
+    camera: {frame: 3x3 transform to first-frame pixels}
     """
     det_frames = np.array(sorted(detections))
     if not len(det_frames):
         return []
     window = GOAL_SMOOTH_WINDOW_S * fps
-    # detections in first-frame (stabilized) pixels
+    # put all detections in first-frame coordinates
     stab = {}
     for f in det_frames:
         boxes = np.array(detections[f], float).reshape(-1, 5)
@@ -99,7 +93,7 @@ def smooth_goals(detections, camera, fps, width, height):
         near = [g for g in det_frames[lo:hi] if g in stab]
         if not near:
             continue
-        # nearby detections into this frame's pixels (weight: closer in time)
+        # bring nearby detections into this frame, closer ones count more
         to_frame = np.linalg.inv(camera[f])
         cands = []
         for g in near:
@@ -107,7 +101,7 @@ def smooth_goals(detections, camera, fps, width, height):
             for b in stab[g]:
                 box = _map_boxes(b[None, :4], to_frame)[0]
                 cands.append((box, b[4], weight, g))
-        # group overlapping boxes (one group per physical goal)
+        # one group per goal
         groups = []
         for box, conf, weight, g in sorted(cands, key=lambda c: -c[1] * c[2]):
             for grp in groups:
@@ -144,7 +138,7 @@ def write_goals(rows, path):
 
 
 def load_goals(path):
-    """{frame: [(x1, y1, x2, y2), ...]}"""
+    """Returns {frame: [(x1, y1, x2, y2), ...]} or None."""
     path = Path(path)
     if not path.exists():
         return None
