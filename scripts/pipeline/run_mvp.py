@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from config.config import (
     OUTPUT_DIR,
     TEAM_OUTPUT,
     TEST_VIDEO,
+    WRITE_DEBUG_VIDEOS,
 )
 
 from scripts.analytics.events.passes import run_pass_detection
@@ -32,7 +34,10 @@ from scripts.analytics.events.turnovers import run_turnover_detection
 from scripts.analytics.match_stats import run_match_stats
 from scripts.analytics.heatmap import HeatmapEngine
 from scripts.analytics.motion_engine import MotionEngine
-from scripts.track import run_tracking
+from scripts.track import camera_summary_path, run_tracking
+from scripts.analytics.analysis_video import render_analysis_video
+from scripts.vision.goals import goals_path
+from scripts.vision.team_assigner import bgr_hex, team_kit_colors
 from scripts.vision.team_assigner import run_team_assignment
 
 ANALYTICS_DIR = OUTPUT_DIR / "analytics"
@@ -282,6 +287,15 @@ def run_mvp(
     if not csv_path.exists():
         raise FileNotFoundError(f"Coordinate CSV was not created: {csv_path}")
 
+    # Shots/goals are measured against goals detected in the video; without
+    # a goal track (goal model not installed) they are not measured.
+    summary_path = camera_summary_path(csv_path)
+    camera_motion = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else None
+    goals_csv = goals_path(csv_path)
+    shots_measured = goals_csv.exists()
+    if not shots_measured:
+        print("No goal track for this video (goal model not installed): shots/goals are not measured.")
+
     print("Running analytics (MotionEngine)...")
     rows, heatmap_paths, identity_column, analytics_csv, heatmap_dir = run_analytics(
         csv_path,
@@ -298,6 +312,7 @@ def run_mvp(
             video_path,
             frame_state_csv=paths["frame_state_csv"],
             validation_video=paths["possession_video"],
+            write_video=WRITE_DEBUG_VIDEOS,
         )
 
     team_result = None
@@ -307,7 +322,9 @@ def run_mvp(
             csv_path,
             video_path,
             output_csv=paths["teams_csv"],
-            write_overlay=True,
+            write_overlay=WRITE_DEBUG_VIDEOS,
+            goals_csv=goals_csv,
+            frame_state_csv=paths["frame_state_csv"],
         )
 
     pass_result = None
@@ -335,18 +352,21 @@ def run_mvp(
         )
 
     shot_result = None
-    if not skip_shots and Path(frame_state_csv).exists() and Path(teams_csv).exists():
+    if not skip_shots and shots_measured and Path(frame_state_csv).exists() and Path(teams_csv).exists():
         print("Running shot/on-target/goal detection (post-process, no YOLO)...")
         shot_result = run_shot_detection(
             frame_state_csv,
             teams_csv,
             video_path,
+            goals_csv,
+            coordinate_csv=csv_path,
             suffix=paths.get("passes_suffix", ""),
         )
 
     match_stats_result = None
     suffix = paths.get("passes_suffix", "")
     tag = f"_{suffix}" if suffix else ""
+    kit_colors = team_kit_colors(csv_path, teams_csv) if Path(teams_csv).exists() else None
     if not skip_match_stats and Path(frame_state_csv).exists() and Path(teams_csv).exists():
         print("Building match stats (product data layer, no YOLO)...")
         match_stats_result = run_match_stats(
@@ -361,6 +381,24 @@ def run_mvp(
             start_time_s=start_time,
             duration_s=duration,
             identity_audit_csv=IDENTITY_OUTPUT / "identity_audit.csv",
+            shots_measured=shots_measured,
+            camera_motion=camera_motion,
+            kit_colors={team: bgr_hex(c) for team, c in kit_colors.items()} if kit_colors else None,
+        )
+
+    analysis_video = None
+    if not skip_match_stats and Path(frame_state_csv).exists() and Path(teams_csv).exists():
+        print("Rendering analysis video (H.264, for the dashboard)...")
+        analysis_video = render_analysis_video(
+            video_path,
+            csv_path,
+            frame_state_csv,
+            teams_csv,
+            goals_csv,
+            EVENTS_OUTPUT,
+            OUTPUT_DIR / "analysis" / f"analysis_video{tag}.mp4",
+            kit_colors,
+            tag=tag,
         )
 
     print("\n" + "=" * 60)
@@ -391,6 +429,8 @@ def run_mvp(
     if shot_result:
         print(f"Shots CSV          : {shot_result['shots_csv']}")
         print(f"Shot validation    : {shot_result['validation_csv']}")
+    if analysis_video:
+        print(f"Analysis video     : {analysis_video}")
     if match_stats_result:
         print(f"Match stats JSON   : {match_stats_result['json']}")
         print(f"Match stats CSV    : {match_stats_result['csv']}")

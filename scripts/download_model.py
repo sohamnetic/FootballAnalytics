@@ -1,17 +1,27 @@
+"""Fetch every model the pipeline needs into models/ (skips files already present)."""
+import urllib.request
+
 from ultralytics import YOLO
-from pathlib import Path
 
-# Path where we want the model to live
-model_path = Path(r"D:\FootballAnalytics\models\yolo11n.pt")
+from config.config import IDENTITY_REID_WEIGHTS, MODELS_DIR, PERSON_MODEL, YOLO_MODEL
 
-print("Loading model...")
+REID_URL = "https://github.com/mikel-brostrom/boxmot/releases/download/v21.0.0/lmbn_n_duke.pt"
 
-# If the model isn't present, Ultralytics downloads it automatically.
-model = YOLO(str(model_path) if model_path.exists() else "yolo11n.pt")
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Save a copy into our models folder if needed.
-if not model_path.exists():
-    model.save(str(model_path))
+for path in (YOLO_MODEL, PERSON_MODEL):
+    if path.exists():
+        print(f"present   : {path}")
+        continue
+    # Ultralytics downloads official weights by bare name into the cwd.
+    model = YOLO(path.name)
+    model.save(str(path))
+    print(f"downloaded: {path}")
 
-print("Model loaded successfully!")
-print(f"Model path: {model_path}")
+if IDENTITY_REID_WEIGHTS.exists():
+    print(f"present   : {IDENTITY_REID_WEIGHTS}")
+else:
+    urllib.request.urlretrieve(REID_URL, IDENTITY_REID_WEIGHTS)
+    print(f"downloaded: {IDENTITY_REID_WEIGHTS}")
+
+print("Jersey OCR (EasyOCR) weights download to ~/.EasyOCR on first use.")

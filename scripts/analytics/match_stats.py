@@ -16,20 +16,33 @@ from pathlib import Path
 import cv2
 import pandas as pd
 
-from config.config import OUTPUT_DIR, RAW_VIDEO
+from config.config import IDENTITY_RESOLVER_ENABLED, OUTPUT_DIR, RAW_VIDEO
+from scripts.analytics.events.timing import EventTiming
 from scripts.analytics.events.passes import VALID_TEAMS, _confirmed_intervals, _load_teams
 
 ANALYTICS_DIR = OUTPUT_DIR / "analytics"
 PIPELINE_VERSION = "mvp-product-data-v1"
-IDENTITY_QUALITY = "MVP_FRAGMENTED"
+# Offline resolution (scripts/identity/resolver.py) merges tracker fragments into
+# one id per player; without it, stable_id is the fragmented online id.
+IDENTITY_QUALITY = "RESOLVED_ESTIMATE" if IDENTITY_RESOLVER_ENABLED else "MVP_FRAGMENTED"
+
+SHOTS_NOT_MEASURED = (
+    "Shots and goals are not measured for this video: the goal detector is not installed, "
+    "so goal positions are unknown."
+)
 
 KNOWN_LIMITATIONS = [
-    "stable_id is not a unique real-world player; identity is fragmented across ByteTrack gaps.",
-    "Team assignment is jersey-colour clustering in camera pixels, not official team sheets.",
+    (
+        "stable_id is estimated by matching appearance, jersey numbers and movement across tracker gaps; "
+        "it is not a shirt number, and same-kit players with no readable number can still be confused."
+        if IDENTITY_RESOLVER_ENABLED
+        else "stable_id is not a unique real-world player; identity is fragmented across ByteTrack gaps."
+    ),
+    "Teams come from kit colour groups, not official team sheets; goalkeepers are recognised by staying near a goal and the referee is excluded.",
     "Pass accuracy is null: completed passes exist, but attempted-pass is not a defensible MVP definition.",
-    "Shot and goal geometry is manually configured in camera pixels, not metres or homography.",
-    "False-positive goals are suppressed by design; missed shots/goals are expected.",
-    "Interceptions and recoveries are conservative post-process labels, not broadcast events.",
+    "Goals are found by detecting the goal frame and net in the video; shots toward a goal that is off screen are not counted.",
+    "A goal is counted when the ball is seen going into the net; missed shots/goals are expected when the ball is hidden.",
+    "Interceptions and recoveries are post-process labels, not broadcast events; they are the least reliable stat (stoppages and identity mix-ups can create false ones).",
     "Possession % is each team's share of confirmed team possession and sums to 100%. Loose/unknown time is excluded from that split.",
 ]
 
@@ -138,7 +151,7 @@ def _possession_seconds(frame_df, fps):
         state = str(row.get("possession_state", "")).strip().lower()
         state_frames[state] += 1
 
-    intervals = _confirmed_intervals(frame_df)
+    intervals = _confirmed_intervals(frame_df, EventTiming(fps).possession_merge_gap)
     for interval in intervals:
         sid = interval["stable_id"]
         seconds = interval["frames"] * frame_period
@@ -169,6 +182,9 @@ def build_match_stats(
     start_time_s=200,
     duration_s=40,
     identity_audit_csv=None,
+    shots_measured=True,
+    camera_motion=None,
+    kit_colors=None,
 ):
     fps = _video_fps(video_path)
     teams = _load_teams(teams_csv)
@@ -177,7 +193,8 @@ def build_match_stats(
     passes_df = _dedupe_events(_read_csv_or_empty(passes_csv))
     intercepts_df = _dedupe_events(_read_csv_or_empty(interceptions_csv))
     recoveries_df = _dedupe_events(_read_csv_or_empty(recoveries_csv))
-    shots_df = _dedupe_events(_read_csv_or_empty(shots_csv))
+    # Unmeasured shots must not fall back to a stale shots CSV in the folder.
+    shots_df = _dedupe_events(_read_csv_or_empty(shots_csv)) if shots_measured else pd.DataFrame()
 
     inconsistencies = []
     valid_players = {
@@ -289,6 +306,12 @@ def build_match_stats(
             player["ball_possession_time_seconds"], 4
         )
 
+    if not shots_measured:
+        for block in list(players.values()) + list(team_stats.values()):
+            for key in ("goals", "shots", "shots_on_target", "shot_accuracy", "shot_conversion_rate"):
+                if key in block:
+                    block[key] = None
+
     player_list = list(players.values())
 
     identity_ids = None
@@ -318,6 +341,12 @@ def build_match_stats(
             shots_df["goal"].map(_as_bool).sum()
         ) if shots_df is not None and not shots_df.empty and "goal" in shots_df.columns else 0,
     }
+    if not shots_measured:
+        event_summary.update(shots=None, shots_on_target=None, goals=None)
+
+    limitations = list(KNOWN_LIMITATIONS)
+    if not shots_measured:
+        limitations.insert(0, SHOTS_NOT_MEASURED)
 
     payload = {
         "match": {
@@ -326,6 +355,7 @@ def build_match_stats(
             "duration_s": float(duration_s) if duration_s is not None else round(clip_s, 4),
             "fps": round(fps, 4),
             "clip_duration_used_s": round(clip_s, 4),
+            "kit_colors": kit_colors,
         },
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "pipeline_version": PIPELINE_VERSION,
@@ -336,9 +366,11 @@ def build_match_stats(
             "valid_team_players": len(players),
             "team_assignment_counts": team_id_counts,
             "estimated_visible_players": "~10-16",
-            "identity_fragmentation": True,
+            "identity_fragmentation": not IDENTITY_RESOLVER_ENABLED,
             "team_assignment_uncertainty": True,
             "goal_geometry_manual": True,
+            "shots_goals_measured": shots_measured,
+            "camera_motion": camera_motion,
             "pass_attempts_available": False,
             "possession_basis": "share_of_confirmed_team_possession",
             "possession_confirmed_seconds": round(confirmed_s, 4),
@@ -348,7 +380,7 @@ def build_match_stats(
         "event_summary": event_summary,
         "teams": team_stats,
         "players": player_list,
-        "known_limitations": KNOWN_LIMITATIONS,
+        "known_limitations": limitations,
         "inconsistencies": inconsistencies,
     }
 
@@ -366,19 +398,27 @@ def validate_match_stats(payload):
     def sum_field(name):
         return sum(p[name] for p in players)
 
-    checks["team_goals_eq_player_goals"] = (
-        teams["team_a"]["goals"] + teams["team_b"]["goals"] == sum_field("goals")
-        == summary["goals"]
-    )
-    checks["team_shots_eq_player_shots"] = (
-        teams["team_a"]["shots"] + teams["team_b"]["shots"] == sum_field("shots")
-        == summary["shots"]
-    )
-    checks["team_sot_eq_player_sot"] = (
-        teams["team_a"]["shots_on_target"] + teams["team_b"]["shots_on_target"]
-        == sum_field("shots_on_target")
-        == summary["shots_on_target"]
-    )
+    if summary["shots"] is None:
+        shot_keys = ("goals", "shots", "shots_on_target")
+        checks["unmeasured_shots_are_null_everywhere"] = all(
+            summary[k] is None for k in shot_keys
+        ) and all(
+            block[k] is None for block in list(teams.values()) + players for k in shot_keys
+        )
+    else:
+        checks["team_goals_eq_player_goals"] = (
+            teams["team_a"]["goals"] + teams["team_b"]["goals"] == sum_field("goals")
+            == summary["goals"]
+        )
+        checks["team_shots_eq_player_shots"] = (
+            teams["team_a"]["shots"] + teams["team_b"]["shots"] == sum_field("shots")
+            == summary["shots"]
+        )
+        checks["team_sot_eq_player_sot"] = (
+            teams["team_a"]["shots_on_target"] + teams["team_b"]["shots_on_target"]
+            == sum_field("shots_on_target")
+            == summary["shots_on_target"]
+        )
     checks["team_passes_eq_player_passes"] = (
         teams["team_a"]["completed_passes"] + teams["team_b"]["completed_passes"]
         == sum_field("successful_passes")
@@ -409,7 +449,7 @@ def validate_match_stats(payload):
     checks["all_players_have_valid_team"] = all(p["team_id"] in VALID_TEAMS for p in players)
     checks["null_shot_metrics_when_zero_shots"] = all(
         (p["shot_accuracy"] is None and p["shot_conversion_rate"] is None)
-        if p["shots"] == 0
+        if not p["shots"]
         else (p["shot_accuracy"] is not None and p["shot_conversion_rate"] is not None)
         for p in players
     )
@@ -508,6 +548,9 @@ def run_match_stats(
     start_time_s=200,
     duration_s=40,
     identity_audit_csv=None,
+    shots_measured=True,
+    camera_motion=None,
+    kit_colors=None,
 ):
     ANALYTICS_DIR.mkdir(parents=True, exist_ok=True)
     tag = f"_{suffix}" if suffix else ""
@@ -522,6 +565,9 @@ def run_match_stats(
         start_time_s=start_time_s,
         duration_s=duration_s,
         identity_audit_csv=identity_audit_csv,
+        shots_measured=shots_measured,
+        camera_motion=camera_motion,
+        kit_colors=kit_colors,
     )
     json_path = ANALYTICS_DIR / f"match_stats{tag}.json"
     csv_path = ANALYTICS_DIR / f"match_stats{tag}.csv"

@@ -1,0 +1,6 @@
+# Dev-only tools, not needed to run the pipeline or the API.
+#
+# scripts/tools/label_goals.py auto-labels goal frames with Grounding DINO +
+# CLIP (weights download from Hugging Face on first run); the result trains
+# models/goal_yolo11n.pt via scripts/tools/train_goal_detector.py.
+transformers>=5.0

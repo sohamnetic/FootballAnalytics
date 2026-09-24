@@ -17,10 +17,9 @@ from config.config import (
     EVENTS_OUTPUT,
     OUTPUT_DIR,
     PASS_MAX_MISSING_BALL_RATIO,
-    PASS_MAX_TRANSITION_FRAMES,
-    PASS_MIN_POSSESSION_FRAMES,
     TEAM_OUTPUT,
 )
+from scripts.analytics.events.timing import EventTiming
 
 VALID_TEAMS = {"team_a", "team_b"}
 ANALYTICS_DIR = OUTPUT_DIR / "analytics"
@@ -59,9 +58,12 @@ def _load_teams(teams_csv):
     return mapping
 
 
-def _confirmed_intervals(frame_df):
+def _confirmed_intervals(frame_df, merge_gap_frames=0):
     """
     Contiguous runs of possession_state == confirmed with the same possessor.
+    Runs of one player split by a gap of at most merge_gap_frames (a dribble:
+    the ball pushed ahead, then collected again) are one possession; its
+    "frames" counts only the confirmed frames.
     """
     intervals = []
     current = None
@@ -103,7 +105,22 @@ def _confirmed_intervals(frame_df):
 
     if current is not None:
         intervals.append(current)
-    return intervals
+    if merge_gap_frames <= 0:
+        return intervals
+    merged = []
+    for interval in intervals:
+        last = merged[-1] if merged else None
+        if (
+            last is not None
+            and last["stable_id"] == interval["stable_id"]
+            and interval["start_frame"] - last["end_frame"] - 1 <= merge_gap_frames
+        ):
+            last["end_frame"] = interval["end_frame"]
+            last["end_time_s"] = interval["end_time_s"]
+            last["frames"] += interval["frames"]
+        else:
+            merged.append(dict(interval))
+    return merged
 
 
 def _transition_ball_stats(frame_df, start_frame, end_frame):
@@ -129,23 +146,23 @@ def _transition_ball_stats(frame_df, start_frame, end_frame):
     }
 
 
-def _pass_confidence(transition_frames, passer_frames, missing_ratio):
+def _pass_confidence(transition_frames, passer_frames, missing_ratio, timing):
     score = 0.40
-    if transition_frames <= 10:
+    if transition_frames <= timing.quick_transition:
         score += 0.25
-    elif transition_frames <= 20:
+    elif transition_frames <= timing.medium_transition:
         score += 0.15
     else:
         score += 0.05
     score += 0.20 * max(0.0, 1.0 - missing_ratio)
-    if passer_frames >= 15:
+    if passer_frames >= timing.settled_possession:
         score += 0.15
-    elif passer_frames >= PASS_MIN_POSSESSION_FRAMES:
+    elif passer_frames >= timing.pass_min_possession:
         score += 0.08
     return round(min(1.0, score), 3)
 
 
-def classify_transition(prev, nxt, teams, ball_stats):
+def classify_transition(prev, nxt, teams, ball_stats, timing):
     passer = prev["stable_id"]
     receiver = nxt["stable_id"]
     transition_frames = nxt["start_frame"] - prev["end_frame"] - 1
@@ -158,13 +175,13 @@ def classify_transition(prev, nxt, teams, ball_stats):
     if passer == receiver:
         return "rejected", "same_stable_id", None
 
-    if prev["frames"] < PASS_MIN_POSSESSION_FRAMES:
+    if prev["frames"] < timing.pass_min_possession:
         return "rejected", "passer_possession_too_short", None
 
-    if nxt["frames"] < PASS_MIN_POSSESSION_FRAMES:
+    if nxt["frames"] < timing.pass_min_possession:
         return "rejected", "receiver_possession_too_short", None
 
-    if transition_frames > PASS_MAX_TRANSITION_FRAMES:
+    if transition_frames > timing.pass_max_transition:
         return "rejected", "transition_too_long", None
 
     if ball_stats["n"] > 0 and ball_stats["missing_ratio"] > PASS_MAX_MISSING_BALL_RATIO:
@@ -180,14 +197,16 @@ def classify_transition(prev, nxt, teams, ball_stats):
         transition_frames,
         prev["frames"],
         ball_stats["missing_ratio"],
+        timing,
     )
     return "completed_pass", "same_team_confirmed_possession", confidence
 
 
 def detect_passes(frame_state_csv, teams_csv, fps):
+    timing = EventTiming(fps)
     frame_df = pd.read_csv(frame_state_csv)
     teams = _load_teams(teams_csv)
-    intervals = _confirmed_intervals(frame_df)
+    intervals = _confirmed_intervals(frame_df, timing.possession_merge_gap)
 
     validation = []
     passes = []
@@ -219,7 +238,7 @@ def detect_passes(frame_state_csv, teams_csv, fps):
                 counts["cross_team_transitions"] += 1
 
         decision, reason, confidence = classify_transition(
-            prev, nxt, teams, ball_stats
+            prev, nxt, teams, ball_stats, timing
         )
         rec = {
             "event_id": event_id if decision == "completed_pass" else "",
@@ -374,8 +393,9 @@ def run_pass_detection(
 
     print("Pass detection (MVP, stable_id-level):")
     print(f"  FPS                        : {fps:.4f}")
-    print(f"  max transition frames      : {PASS_MAX_TRANSITION_FRAMES}")
-    print(f"  min possession frames      : {PASS_MIN_POSSESSION_FRAMES}")
+    timing = EventTiming(fps)
+    print(f"  max transition frames      : {timing.pass_max_transition}")
+    print(f"  min possession frames      : {timing.pass_min_possession}")
     print(f"  confirmed intervals        : {counts['confirmed_intervals']}")
     print(f"  possession transitions     : {counts['transitions']}")
     print(f"  same-team transitions      : {counts['same_team_transitions']}")

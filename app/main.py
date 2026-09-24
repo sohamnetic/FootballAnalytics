@@ -11,7 +11,7 @@ import re
 import uuid
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -39,7 +39,7 @@ ALLOWED_EXT = {".mp4", ".mov", ".avi", ".mkv"}
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024  # 8 GB local prototype
 MATCH_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
-app = FastAPI(title="Football Analytics", version="mvp-product")
+app = FastAPI(title="TactiVision", version="mvp-product")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -69,14 +69,30 @@ class AuthBody(BaseModel):
     name: str = Field(default="", max_length=80)
 
 
-def current_user(authorization: str | None = Header(default=None)) -> dict:
-    if not authorization or not authorization.lower().startswith("bearer "):
+def current_user(
+    authorization: str | None = Header(default=None),
+    token: str | None = Query(default=None),
+) -> dict:
+    raw = None
+    if authorization and authorization.lower().startswith("bearer "):
+        raw = authorization.split(" ", 1)[1].strip()
+    elif token:
+        raw = token.strip()
+    if not raw:
         raise HTTPException(status_code=401, detail="Please sign in")
-    token = authorization.split(" ", 1)[1].strip()
     try:
-        return parse_token(token)
+        return parse_token(raw)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail="Please sign in again") from exc
+
+
+def _first_analysis_video(match_id: str) -> Path | None:
+    """The H.264 analysis video (scripts/analytics/analysis_video.py). The
+    per-stage debug overlays are MPEG-4 Part 2, which browsers can't play,
+    so they are never offered to the dashboard."""
+    videos = sorted((match_output_dir(match_id) / "analysis").glob("analysis_video*.mp4"))
+    videos = [v for v in videos if not v.name.endswith(".part.mp4") and v.is_file()]
+    return videos[0] if videos else None
 
 
 def _owns_match(row: dict, user: dict) -> bool:
@@ -293,6 +309,20 @@ def stats(match_id: str, user: dict = Depends(current_user)):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@app.get("/api/matches/{match_id}/media")
+def media(match_id: str, user: dict = Depends(current_user)):
+    row = get_match(_valid_id(match_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if not _owns_match(row, user):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    source = Path(row.get("video_path") or "")
+    return {
+        "source_video": source.exists(),
+        "analysis_video": _first_analysis_video(match_id) is not None,
+    }
+
+
 @app.get("/api/matches/{match_id}/video")
 def video(match_id: str, user: dict = Depends(current_user)):
     row = get_match(_valid_id(match_id))
@@ -303,7 +333,9 @@ def video(match_id: str, user: dict = Depends(current_user)):
     path = Path(row["video_path"])
     if not path.exists():
         raise HTTPException(status_code=404, detail="Video missing")
-    return FileResponse(path, media_type="video/mp4", filename=row.get("filename") or path.name)
+    return FileResponse(
+        path, media_type="video/mp4", filename=row.get("filename") or path.name, content_disposition_type="inline",
+    )
 
 
 @app.get("/api/matches/{match_id}/analysis-video")
@@ -313,15 +345,7 @@ def analysis_video(match_id: str, user: dict = Depends(current_user)):
         raise HTTPException(status_code=404, detail="Match not found")
     if not _owns_match(row, user):
         raise HTTPException(status_code=403, detail="Not allowed")
-    _valid_id(match_id)
-    root = match_output_dir(match_id)
-    candidates = [
-        root / "teams" / "team_validation.mp4",
-        root / "events" / "possession_validation.mp4",
-        root / "events" / "shot_validation.mp4",
-        root / "tracking" / "match_tracking" / "match.mp4",
-    ]
-    for path in candidates:
-        if path.exists():
-            return FileResponse(path, media_type="video/mp4", filename=path.name)
-    raise HTTPException(status_code=404, detail="No analysis video available")
+    path = _first_analysis_video(match_id)
+    if not path:
+        raise HTTPException(status_code=404, detail="No analysis video available")
+    return FileResponse(path, media_type="video/mp4", filename=path.name, content_disposition_type="inline")

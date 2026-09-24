@@ -12,6 +12,10 @@ venv/
 # Generated outputs
 outputs/
 
+# Large model weights (fetched by scripts/download_model.py)
+models/yolo11m.pt
+models/lmbn_n_duke.pt
+
 # Python cache
 .pytest_cache/
 
@@ -21,6 +25,10 @@ outputs/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+
+# Goal detector training frames (rebuilt by scripts/tools/label_goals.py);
+# the trained models/goal_yolo11n.pt is committed: it can't be downloaded
+data/goal_dataset/
 
 # Product runtime
 data/uploads/
@@ -37,3 +45,6 @@ videos/**/*.mp4
 
 # Windows
 Thumbs.db
+# Local tooling / build artifacts
+.claude/
+*.tsbuildinfo

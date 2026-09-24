@@ -1,13 +1,19 @@
 """
-Coarse team assignment from jersey colour.
+Team assignment.
 
 Assigns each person stable_id to team_a, team_b, referee, or unknown.
 This is NOT exact player identification. Sports ball rows are ignored.
+
+When the identity resolver ran, its kit groups decide (assign_teams_by_kit):
+the two kits worn by the most players are the teams; anyone else is a
+goalkeeper (stays near a goal; team = where their distributions go) or the
+referee. Otherwise jersey colours are clustered into two teams.
 """
 
 from __future__ import annotations
 
 import csv
+import json
 import math
 from collections import defaultdict
 from pathlib import Path
@@ -17,6 +23,9 @@ import numpy as np
 import pandas as pd
 
 from config.config import (
+    GOALKEEPER_MIN_NEAR_GOAL_SHARE,
+    GOALKEEPER_NEAR_GOAL_GH,
+    IDENTITY_OUTPUT,
     TEAM_AMBIGUOUS_RATIO,
     TEAM_ASSIGN_MIN_CONFIDENCE,
     TEAM_DET_MIN_CONFIDENCE,
@@ -27,6 +36,7 @@ from config.config import (
     TEAM_SAMPLE_STRIDE,
 )
 
+from scripts.vision.goals import load_goals
 from scripts.vision.jersey_color import JerseyColorExtractor
 
 PERSON_CLASS = "person"
@@ -282,6 +292,135 @@ def assign_teams(samples, min_samples=TEAM_MIN_SAMPLES):
     return assignments, reps, team_centers, clusterable
 
 
+DEFAULT_KIT_BGR = {TEAM_A: (60, 60, 225), TEAM_B: (225, 150, 60)}
+
+
+def kit_bgr(hue_bin, bins=18):
+    """A clean display colour for a kit hue bin (OpenCV hue, 0-180)."""
+    hue = int((hue_bin + 0.5) * 180 / bins)
+    hsv = np.uint8([[[hue, 190, 235]]])
+    return tuple(int(v) for v in cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0])
+
+
+def team_kit_colors(csv_path, teams_csv):
+    """{team_a/team_b: BGR} from the kit worn by most of each team's
+    detections (identity resolver report); fixed defaults otherwise."""
+    colors = dict(DEFAULT_KIT_BGR)
+    report_path = identity_report_path(csv_path)
+    if not report_path.exists() or not Path(teams_csv).exists():
+        return colors
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    teams_df = pd.read_csv(teams_csv)
+    team_of = dict(zip(teams_df["stable_id"].astype(int), teams_df["team_id"]))
+    weight = defaultdict(lambda: defaultdict(int))
+    for x in report.get("identity_detail") or []:
+        team = team_of.get(int(x["identity"]))
+        if team in colors:
+            weight[team][x["kit_hue_bin"]] += x["detections"]
+    for team, bins in weight.items():
+        colors[team] = kit_bgr(max(bins, key=bins.get))
+    return colors
+
+
+def bgr_hex(bgr):
+    return "#{:02x}{:02x}{:02x}".format(bgr[2], bgr[1], bgr[0])
+
+
+def identity_report_path(csv_path):
+    return IDENTITY_OUTPUT / f"identity_resolution_{Path(csv_path).stem}.json"
+
+
+def _goalkeepers(csv_path, goals_csv, candidates):
+    """Candidates whose feet are near a goal most of the time a goal is in view."""
+    goals = load_goals(goals_csv) if goals_csv else None
+    if not goals or not candidates:
+        return {}
+    df = pd.read_csv(csv_path)
+    df = df[(df["class"] == PERSON_CLASS) & df["stable_id"].isin(candidates)]
+    near, seen = defaultdict(int), defaultdict(int)
+    for r in df.itertuples(index=False):
+        boxes = goals.get(int(r.frame))
+        if not boxes:
+            continue
+        x, y = (r.x1 + r.x2) / 2, r.y2
+        sid = int(r.stable_id)
+        seen[sid] += 1
+        for gx1, gy1, gx2, gy2 in boxes:
+            gh = max(gy2 - gy1, 1.0)
+            dx = max(gx1 - x, 0.0, x - gx2)
+            dy = max(gy1 - y, 0.0, y - gy2)
+            if math.hypot(dx, dy) / gh <= GOALKEEPER_NEAR_GOAL_GH:
+                near[sid] += 1
+                break
+    return {
+        sid: near[sid] / seen[sid]
+        for sid in seen
+        if seen[sid] >= 30 and near[sid] / seen[sid] >= GOALKEEPER_MIN_NEAR_GOAL_SHARE
+    }
+
+
+def _distribution_team(frame_state_csv, keeper, team_of, max_gap):
+    """A keeper's team: where their possessions go next (mostly teammates)."""
+    if not frame_state_csv or not Path(frame_state_csv).exists():
+        return None, 0
+    fs = pd.read_csv(frame_state_csv)
+    fs = fs[fs["possession_state"] == "confirmed"].dropna(subset=["possessor_stable_id"])
+    runs = []
+    for f, sid in zip(fs["frame"].astype(int), fs["possessor_stable_id"].astype(int)):
+        if runs and runs[-1][0] == sid and f == runs[-1][2] + 1:
+            runs[-1][2] = f
+        else:
+            runs.append([sid, f, f])
+    votes = defaultdict(int)
+    for (a, _, end), (b, start, _) in zip(runs, runs[1:]):
+        if a == keeper and b != keeper and start - end <= max_gap and team_of.get(b) in (TEAM_A, TEAM_B):
+            votes[team_of[b]] += 1
+    total = sum(votes.values())
+    if total < 3:
+        return None, total
+    team = max(votes, key=votes.get)
+    return (team if votes[team] >= 0.65 * total else None), total
+
+
+def assign_teams_by_kit(report, csv_path, goals_csv=None, frame_state_csv=None, fps=30.0):
+    """Teams from the identity resolver's kit groups; None if they don't show two teams."""
+    ids = report.get("identity_detail") or []
+    det_by_kit = defaultdict(int)
+    for x in ids:
+        det_by_kit[x["kit_hue_bin"]] += x["detections"]
+    kits = sorted(det_by_kit, key=lambda k: -det_by_kit[k])
+    if len(kits) < 2 or det_by_kit[kits[1]] < 0.25 * det_by_kit[kits[0]]:
+        return None
+    low, high = sorted(kits[:2])  # lower hue -> team_a, stable across runs
+    kit_team = {low: TEAM_A, high: TEAM_B}
+
+    assignments = {}
+    others = []
+    for x in ids:
+        sid = x["identity"]
+        if x["kit_hue_bin"] in kit_team:
+            assignments[sid] = {"team_id": kit_team[x["kit_hue_bin"]], "confidence": 0.9,
+                                "reason": f"team kit (hue group {x['kit_hue_bin']})"}
+        else:
+            others.append(sid)
+
+    team_of = {sid: a["team_id"] for sid, a in assignments.items()}
+    keepers = _goalkeepers(csv_path, goals_csv, others)
+    for sid in others:
+        if sid in keepers:
+            team, votes = _distribution_team(frame_state_csv, sid, team_of, int(0.5 * fps) + 1)
+            if team:
+                assignments[sid] = {"team_id": team, "confidence": 0.7,
+                                    "reason": f"goalkeeper ({keepers[sid]:.0%} near goal; {votes} distributions)"}
+            else:
+                assignments[sid] = {"team_id": UNKNOWN, "confidence": 0.4,
+                                    "reason": f"goalkeeper, team unclear ({votes} distributions)"}
+        else:
+            assignments[sid] = {"team_id": REFEREE, "confidence": 0.7,
+                                "reason": "not a team kit and not in goal (referee / official)"}
+    return assignments
+
+
 def write_player_teams_csv(assignments, samples, reps, output_path):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -444,8 +583,10 @@ def run_team_assignment(
     csv_path,
     video_path,
     output_csv=None,
-    write_overlay=True,
+    write_overlay=False,
     overlay_max_frames=None,
+    goals_csv=None,
+    frame_state_csv=None,
 ):
     TEAM_OUTPUT.mkdir(parents=True, exist_ok=True)
     csv_path = Path(csv_path)
@@ -454,6 +595,17 @@ def run_team_assignment(
     print("Collecting jersey samples (person rows only)...")
     samples = collect_jersey_samples(csv_path, video_path)
     assignments, reps, _centers, _clusterable = assign_teams(samples)
+    report_path = identity_report_path(csv_path)
+    if report_path.exists():
+        cap = cv2.VideoCapture(str(video_path))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        cap.release()
+        by_kit = assign_teams_by_kit(
+            json.loads(report_path.read_text(encoding="utf-8")), csv_path, goals_csv, frame_state_csv, fps,
+        )
+        if by_kit:
+            print("Teams from identity kit groups (colour clustering kept only for swatches)")
+            assignments = {**{sid: a for sid, a in assignments.items() if sid not in by_kit}, **by_kit}
     csv_out, rows = write_player_teams_csv(assignments, samples, reps, output_csv)
     canonical = TEAM_OUTPUT / "player_teams.csv"
     if Path(csv_out).resolve() != canonical.resolve():

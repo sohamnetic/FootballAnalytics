@@ -22,12 +22,10 @@ import pandas as pd
 
 from config.config import (
     EVENTS_OUTPUT,
-    INTERCEPTION_MAX_TRANSITION_FRAMES,
     OUTPUT_DIR,
     PASS_MAX_MISSING_BALL_RATIO,
-    PASS_MIN_POSSESSION_FRAMES,
-    RECOVERY_MAX_TRANSITION_FRAMES,
 )
+from scripts.analytics.events.timing import EventTiming
 
 from scripts.analytics.events.passes import (
     VALID_TEAMS,
@@ -57,19 +55,19 @@ def _gap_state_stats(frame_df, start_frame, end_frame):
     return {"n": n, "loose_or_unknown": loose, "loose_ratio": loose / n}
 
 
-def _event_confidence(transition_frames, owner_frames, missing_ratio, loose_ratio=0.0):
+def _event_confidence(transition_frames, owner_frames, missing_ratio, timing, loose_ratio=0.0):
     score = 0.35
-    if transition_frames <= 10:
+    if transition_frames <= timing.quick_transition:
         score += 0.25
-    elif transition_frames <= 20:
+    elif transition_frames <= timing.medium_transition:
         score += 0.15
     else:
         score += 0.05
     score += 0.20 * max(0.0, 1.0 - missing_ratio)
     score += 0.10 * min(1.0, loose_ratio)
-    if owner_frames >= 15:
+    if owner_frames >= timing.settled_possession:
         score += 0.10
-    elif owner_frames >= PASS_MIN_POSSESSION_FRAMES:
+    elif owner_frames >= timing.pass_min_possession:
         score += 0.05
     return round(min(1.0, score), 3)
 
@@ -84,7 +82,7 @@ def _write_csv(path, rows, fieldnames):
     return path
 
 
-def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats):
+def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats, timing):
     """
     Classify one confirmed-interval pair. Never emits a completed_pass event.
     """
@@ -95,7 +93,7 @@ def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats):
     next_team = teams.get(receiver)
 
     pass_decision, pass_reason, pass_conf = classify_transition(
-        prev, nxt, teams, ball_stats
+        prev, nxt, teams, ball_stats, timing
     )
     if pass_decision == "completed_pass":
         return {
@@ -111,14 +109,14 @@ def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats):
             "confidence": "",
         }
 
-    if prev["frames"] < PASS_MIN_POSSESSION_FRAMES:
+    if prev["frames"] < timing.pass_min_possession:
         return {
             "classification": "rejected",
             "reason": "previous_possession_too_short",
             "confidence": "",
         }
 
-    if nxt["frames"] < PASS_MIN_POSSESSION_FRAMES:
+    if nxt["frames"] < timing.pass_min_possession:
         return {
             "classification": "rejected",
             "reason": "new_possession_too_short",
@@ -135,7 +133,7 @@ def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats):
     # Cross-team: interception candidate
     both_valid = prev_team in VALID_TEAMS and next_team in VALID_TEAMS
     if both_valid and prev_team != next_team:
-        if transition_frames > INTERCEPTION_MAX_TRANSITION_FRAMES:
+        if transition_frames > timing.interception_max_transition:
             return {
                 "classification": "unknown_turnover",
                 "reason": "cross_team_transition_too_long",
@@ -145,6 +143,7 @@ def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats):
             transition_frames,
             nxt["frames"],
             ball_stats["missing_ratio"],
+            timing,
             gap_stats["loose_ratio"],
         )
         return {
@@ -154,7 +153,7 @@ def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats):
         }
 
     # Loose/unknown gap: recovery candidate (not a classified pass or intercept)
-    if next_team in VALID_TEAMS and transition_frames <= RECOVERY_MAX_TRANSITION_FRAMES:
+    if next_team in VALID_TEAMS and transition_frames <= timing.recovery_max_transition:
         mostly_loose = gap_stats["n"] == 0 or gap_stats["loose_ratio"] >= 0.5
         prev_unreliable = prev_team not in VALID_TEAMS
         if mostly_loose and (prev_unreliable or gap_stats["loose_ratio"] >= 0.5):
@@ -170,6 +169,7 @@ def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats):
                 transition_frames,
                 nxt["frames"],
                 ball_stats["missing_ratio"],
+                timing,
                 gap_stats["loose_ratio"],
             )
             return {
@@ -178,7 +178,7 @@ def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats):
                 "confidence": conf,
             }
 
-    if transition_frames > INTERCEPTION_MAX_TRANSITION_FRAMES:
+    if transition_frames > timing.interception_max_transition:
         return {
             "classification": "rejected",
             "reason": "transition_too_long",
@@ -200,9 +200,10 @@ def classify_turnover_pair(prev, nxt, teams, ball_stats, gap_stats):
 
 
 def detect_turnovers(frame_state_csv, teams_csv, fps):
+    timing = EventTiming(fps)
     frame_df = pd.read_csv(frame_state_csv)
     teams = _load_teams(teams_csv)
-    intervals = _confirmed_intervals(frame_df)
+    intervals = _confirmed_intervals(frame_df, timing.possession_merge_gap)
 
     validation = []
     interceptions = []
@@ -241,7 +242,7 @@ def detect_turnovers(frame_state_csv, teams_csv, fps):
             counts["cross_team_transitions"] += 1
 
         result = classify_turnover_pair(
-            prev, nxt, teams, ball_stats, gap_stats
+            prev, nxt, teams, ball_stats, gap_stats, timing
         )
         classification = result["classification"]
         rec = {
@@ -427,8 +428,9 @@ def run_turnover_detection(frame_state_csv, teams_csv, video_path, suffix=""):
 
     print("Turnover detection (MVP, stable_id-level):")
     print(f"  FPS                            : {fps:.4f}")
-    print(f"  interception max gap           : {INTERCEPTION_MAX_TRANSITION_FRAMES}")
-    print(f"  recovery max gap               : {RECOVERY_MAX_TRANSITION_FRAMES}")
+    timing = EventTiming(fps)
+    print(f"  interception max gap           : {timing.interception_max_transition}")
+    print(f"  recovery max gap               : {timing.recovery_max_transition}")
     print(f"  confirmed intervals            : {counts['confirmed_intervals']}")
     print(f"  turnover candidates            : {counts['turnover_candidates']}")
     print(f"  cross-team transitions         : {counts['cross_team_transitions']}")

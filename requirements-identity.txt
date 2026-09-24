@@ -1,0 +1,12 @@
+# Identity resolution (scripts/identity/tracklet_features.py, resolver.py).
+# Install on top of the CV stack (ultralytics, torch, opencv, pandas, numpy):
+#
+#   pip install easyocr
+#   pip install --no-deps boxmot==25.0.0
+#   pip install --no-deps rich markdown-it-py mdurl Pygments gdown
+#
+# boxmot is installed with --no-deps on purpose: its resolver pulls a second
+# opencv-python wheel alongside the existing one and breaks `import cv2`.
+# We only use its person-ReID runtime (boxmot.reid.core.runtime.ReID).
+easyocr>=1.7
+boxmot==25.0.0

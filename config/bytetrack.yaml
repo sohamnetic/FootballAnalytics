@@ -4,7 +4,10 @@ track_high_thresh: 0.5
 track_low_thresh: 0.1
 new_track_thresh: 0.6
 
-track_buffer: 30
+# ~1.5s at 60fps: bridges short detector dropouts in-tracker; longer gaps
+# (player out of view while the camera pans) are rejoined offline by
+# scripts/identity/resolver.py.
+track_buffer: 90
 
 match_thresh: 0.8
 

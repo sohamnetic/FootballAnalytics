@@ -1,6 +1,6 @@
 from scripts.identity.identity_manager import IdentityManager
 
-manager = IdentityManager()
+manager = IdentityManager(fps=30.0)
 
 print(manager.get_stable_id(
     7,

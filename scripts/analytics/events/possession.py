@@ -19,10 +19,12 @@ import pandas as pd
 
 from config.config import (
     EVENTS_OUTPUT,
-    MAX_BALL_INTERPOLATION_GAP,
-    MAX_POSSESSION_DISTANCE_PX,
-    POSSESSION_CONFIRM_FRAMES,
+    POSSESSION_CHALLENGE_RATIO,
+    POSSESSION_MAX_DISTANCE_BH,
+    POSSESSION_MAX_REL_SPEED_BH_S,
+    POSSESSION_SPEED_WINDOW_S,
 )
+from scripts.analytics.events.timing import EventTiming
 
 FRAME_STATE_CSV = EVENTS_OUTPUT / "frame_state.csv"
 POSSESSION_VIDEO = EVENTS_OUTPUT / "possession_validation.mp4"
@@ -57,15 +59,17 @@ class PossessionEngine:
         self,
         csv_path,
         fps,
-        max_interpolation_gap=MAX_BALL_INTERPOLATION_GAP,
-        max_possession_distance_px=MAX_POSSESSION_DISTANCE_PX,
-        confirm_frames=POSSESSION_CONFIRM_FRAMES,
+        max_interpolation_gap=None,
+        max_possession_distance_bh=POSSESSION_MAX_DISTANCE_BH,
+        confirm_frames=None,
     ):
         self.csv_path = Path(csv_path)
         self.fps = float(fps)
-        self.max_interpolation_gap = int(max_interpolation_gap)
-        self.max_possession_distance_px = float(max_possession_distance_px)
-        self.confirm_frames = int(confirm_frames)
+        timing = EventTiming(self.fps)
+        self.max_interpolation_gap = int(max_interpolation_gap or timing.ball_interpolation_gap)
+        self.max_possession_distance_bh = float(max_possession_distance_bh)
+        self.confirm_frames = int(confirm_frames or timing.possession_confirm)
+        self.speed_half_window = max(1, timing.f(POSSESSION_SPEED_WINDOW_S))
         self.df = pd.read_csv(self.csv_path)
 
     def _dedupe_frame(self, group):
@@ -141,16 +145,33 @@ class PossessionEngine:
         return series
 
     def _nearest_player(self, ball, players):
+        """Nearest player by ball-to-feet distance in body heights.
+        Returns (id, distance_px, distance_bh, {id: distance_bh})."""
         if ball is None or not players:
-            return None, None
-        best_id = None
-        best_dist = None
+            return None, None, None, {}
+        best = None
+        rel = {}
         for player in players:
             dist = math.dist((ball["x"], ball["y"]), (player["x"], player["y"]))
-            if best_dist is None or dist < best_dist:
-                best_dist = dist
-                best_id = player["stable_id"]
-        return best_id, best_dist
+            bh = dist / max(player["y2"] - player["y1"], 1)
+            rel[player["stable_id"]] = bh
+            if best is None or bh < best[2]:
+                best = (player["stable_id"], dist, bh)
+        return best[0], best[1], best[2], rel
+
+    def _moves_with(self, frame, sid, ball_series, feet):
+        """False when the ball flies past the player instead of moving with
+        them: relative ball-player speed over a short window, in the
+        player's body heights per second. Unknown counts as moving with."""
+        k = self.speed_half_window
+        a, b = ball_series.get(frame - k), ball_series.get(frame + k)
+        pa, pb = feet.get((frame - k, sid)), feet.get((frame + k, sid))
+        if a is None or b is None or pa is None or pb is None:
+            return True
+        dx = (b["x"] - a["x"]) - (pb[0] - pa[0])
+        dy = (b["y"] - a["y"]) - (pb[1] - pa[1])
+        speed = math.hypot(dx, dy) / (2 * k / self.fps) / max(pa[2], 1)
+        return speed <= POSSESSION_MAX_REL_SPEED_BH_S
 
     def build_frame_states(self):
         if self.df.empty:
@@ -161,6 +182,10 @@ class PossessionEngine:
         players_by_frame = self._players_by_frame()
         detected = self._detected_balls()
         ball_series = self._ball_series(min_frame, max_frame, detected)
+        feet = {
+            (frame, p["stable_id"]): (p["x"], p["y"], p["y2"] - p["y1"])
+            for frame, players in players_by_frame.items() for p in players
+        }
 
         confirmed = None
         pending_id = None
@@ -178,17 +203,27 @@ class PossessionEngine:
                 possession_state = "unknown"
                 possessor = None
             else:
-                nearest_id, nearest_dist = self._nearest_player(ball, players)
+                nearest_id, nearest_dist, nearest_bh, rel = self._nearest_player(ball, players)
                 in_range = (
-                    nearest_id is not None
-                    and nearest_dist is not None
-                    and nearest_dist <= self.max_possession_distance_px
+                    nearest_bh is not None
+                    and nearest_bh <= self.max_possession_distance_bh
+                    and self._moves_with(frame, nearest_id, ball_series, feet)
                 )
 
                 if not in_range:
                     target = None
                 else:
                     target = nearest_id
+                    # the player on the ball keeps it unless clearly beaten to it
+                    held = rel.get(confirmed)
+                    if (
+                        confirmed is not None
+                        and target != confirmed
+                        and held is not None
+                        and held <= self.max_possession_distance_bh
+                        and nearest_bh > POSSESSION_CHALLENGE_RATIO * held
+                    ):
+                        target = confirmed
 
                 if target == pending_id:
                     pending_count += 1
@@ -449,7 +484,7 @@ def run_possession(
 
     print("Possession configuration:")
     print(f"  max interpolation gap     : {engine.max_interpolation_gap} frames")
-    print(f"  max possession distance   : {engine.max_possession_distance_px} px")
+    print(f"  max possession distance   : {engine.max_possession_distance_bh} body heights")
     print(f"  possession confirm frames : {engine.confirm_frames}")
     print("Possession summary:")
     print(f"  total frames              : {stats['total_frames']}")

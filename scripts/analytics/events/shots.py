@@ -1,11 +1,29 @@
 """
-MVP shot / shot-on-target / goal detection.
+Shots, shots on target and goals, measured against the goals seen in the video.
 
-Post-process of confirmed possession intervals + frame_state ball track + teams.
-Does not modify possession, passes, turnovers, tracking, or ball detection.
+Where the goals are comes from scripts/vision/goals.py (detected posts + net,
+tracked through camera pans). A player's possession ends; the ball's flight
+over the next SHOT_WINDOW_S is followed relative to the goal box of the same
+frame, so a camera pan does not look like ball movement:
 
-Goal geometry is camera-pixel boxes, not real-world metres.
-stable_id is an MVP identity, not a guaranteed real player.
+  goal      the ball goes deep into the goal box and stays there
+            (GOAL_MIN_INSIDE_S) or disappears in it (GOAL_VANISH_S), with no
+            player on it: a ball at a keeper's feet on the line, or in a
+            goalmouth scramble, projects into the box too, but a ball in the
+            net has nobody on it (GOAL_FREE_BALL_MARGIN).
+  shot      the ball leaves the shooter's feet, is struck (SHOT_MIN_SPEED_BH_S;
+            faster than SHOT_MAX_SPEED_BH_S is a ball-tracking jump, not a
+            kick) from within SHOT_MAX_START_GH, travels toward the goal
+            (within SHOT_MAX_AIM_ANGLE_DEG, aim within SHOT_AIM_MARGIN of the
+            box) and gets closer to it, and either gets near it
+            (SHOT_NEAR_GOAL_GH) or is stopped by the other team (block / save).
+  on target a goal, or a shot aimed inside the box that reached it or was
+            saved near it.
+A ball played to a teammate is a pass, not a shot. A shot only counts if a
+goal is in view; shots at an off-screen goal are not measured.
+
+Distances are in goal box heights (GH, ~2 m) and speeds in the shooter's
+body heights per second (BH/s, ~1.8 m/s), so zoom cancels out.
 """
 
 from __future__ import annotations
@@ -14,882 +32,507 @@ import csv
 from pathlib import Path
 
 import cv2
+import numpy as np
 import pandas as pd
 
 from config.config import (
     EVENTS_OUTPUT,
-    GOAL_ZONE_LEFT,
-    GOAL_ZONE_RIGHT,
+    GOAL_FREE_BALL_MARGIN,
+    GOAL_INSIDE_INSET,
     OUTPUT_DIR,
-    PASS_MAX_TRANSITION_FRAMES,
-    SHOT_GOAL_APPROACH_WINDOW_FRAMES,
-    SHOT_GOAL_INSIDE_FRAMES,
-    SHOT_MAX_MISSING_BALL_RATIO,
-    SHOT_MAX_TRANSITION_FRAMES,
-    SHOT_MIN_BALL_MOVEMENT_PX,
-    SHOT_MIN_GOAL_APPROACH_PX,
-    SHOT_MIN_POSSESSION_FRAMES,
-    SHOT_ON_TARGET_MAX_DIST_PX,
-    SHOT_WRITE_VALIDATION_VIDEO,
-    TEAM_DEFENDS_GOAL,
+    SHOT_AIM_MARGIN,
+    SHOT_MAX_AIM_ANGLE_DEG,
+    SHOT_MAX_BALL_TO_SHOOTER_BH,
+    SHOT_MAX_SPEED_BH_S,
+    SHOT_MAX_START_GH,
+    SHOT_MIN_APPROACH_GH,
+    SHOT_MIN_SPEED_BH_S,
+    SHOT_NEAR_GOAL_GH,
+    WRITE_DEBUG_VIDEOS,
 )
 
+from scripts.analytics.events.timing import EventTiming
 from scripts.analytics.events.passes import (
     VALID_TEAMS,
     _confirmed_intervals,
     _load_teams,
     _video_fps,
 )
+from scripts.vision.goals import load_goals
 
 ANALYTICS_DIR = OUTPUT_DIR / "analytics"
-OPPONENT_GOAL = {"team_a": "team_b", "team_b": "team_a"}
+
+SHOT_FIELDS = [
+    "event_id", "frame", "time_s", "shooter_stable_id", "team_id", "target_goal",
+    "ball_start_x", "ball_start_y", "start_distance_gh", "speed_bh_s", "min_distance_gh",
+    "confidence", "on_target", "goal", "outcome",
+]
+VALIDATION_FIELDS = [
+    "frame", "time_s", "shooter", "team", "accepted", "on_target", "goal", "outcome", "reason",
+    "start_distance_gh", "speed_bh_s", "aim_offset", "min_distance_gh", "inside_frames", "goal_in_view",
+]
 
 
 def _write_csv(path, rows, fieldnames):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
     return path
 
 
-def _goal_zones():
-    return {
-        "left": tuple(int(v) for v in GOAL_ZONE_LEFT),
-        "right": tuple(int(v) for v in GOAL_ZONE_RIGHT),
-    }
-
-
-def _rect_center(rect):
-    x1, y1, x2, y2 = rect
-    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
-
-
-def _point_in_rect(x, y, rect):
-    x1, y1, x2, y2 = rect
-    return x1 <= x <= x2 and y1 <= y <= y2
-
-
-def _point_rect_distance(x, y, rect):
-    if _point_in_rect(x, y, rect):
-        return 0.0
-    x1, y1, x2, y2 = rect
+def _rect_distance(x, y, box):
+    x1, y1, x2, y2 = box
     dx = max(x1 - x, 0.0, x - x2)
     dy = max(y1 - y, 0.0, y - y2)
-    return float((dx * dx + dy * dy) ** 0.5)
+    return float(np.hypot(dx, dy))
 
 
-def _segment_intersects_rect(x0, y0, x1, y1, rect):
-    if _point_in_rect(x0, y0, rect) or _point_in_rect(x1, y1, rect):
+def _inside(x, y, box, inset=0.0):
+    x1, y1, x2, y2 = box
+    ix, iy = inset * (x2 - x1), inset * (y2 - y1)
+    return x1 + ix <= x <= x2 - ix and y1 + iy <= y <= y2 - iy
+
+
+def _ray_hits_box(p, v, half_w, half_h):
+    """Ray p + t v (t > 0) against the box [-half_w, half_w] x [-half_h, half_h]."""
+    t_lo, t_hi = 0.0, np.inf
+    for pi, vi, h in ((p[0], v[0], half_w), (p[1], v[1], half_h)):
+        if abs(vi) < 1e-9:
+            if abs(pi) > h:
+                return False
+            continue
+        a, b = (-h - pi) / vi, (h - pi) / vi
+        t_lo, t_hi = max(t_lo, min(a, b)), min(t_hi, max(a, b))
+    return t_lo <= t_hi
+
+
+def _aim_offset(p, v, w, h):
+    """How far the aim misses the goal box, in box widths (0 = inside)."""
+    for margin in np.arange(0.0, 3.01, 0.05):
+        if _ray_hits_box(p, v, w * (0.5 + margin), h * 0.5 + margin * w):
+            return round(float(margin), 2)
+    return None
+
+
+class _Scene:
+    """Per-frame lookups: ball, goals, people."""
+
+    def __init__(self, frame_df, goals, people):
+        fd = frame_df.sort_values("frame")
+        self.ball = {}
+        for r in fd.itertuples(index=False):
+            src = str(r.ball_source).strip().lower()
+            if src != "missing" and pd.notna(r.ball_x) and pd.notna(r.ball_y):
+                self.ball[int(r.frame)] = (float(r.ball_x), float(r.ball_y))
+        self.time = dict(zip(fd["frame"].astype(int), fd["time_s"]))
+        self.goals = goals
+        self.people = people
+
+    def goal_near(self, frame, ref):
+        """The goal box in `frame` that continues `ref` (same physical goal)."""
+        boxes = self.goals.get(frame)
+        if not boxes:
+            return None
+        if ref is None:
+            return None
+        rc = ((ref[0] + ref[2]) / 2, (ref[1] + ref[3]) / 2)
+        best = min(boxes, key=lambda b: np.hypot((b[0] + b[2]) / 2 - rc[0], (b[1] + b[3]) / 2 - rc[1]))
+        # a goal cannot jump more than half its own size between nearby frames
+        if np.hypot((best[0] + best[2]) / 2 - rc[0], (best[1] + best[3]) / 2 - rc[1]) > 0.5 * max(
+            ref[2] - ref[0], ref[3] - ref[1]
+        ):
+            return None
+        return best
+
+    def free(self, frame, x, y):
+        """Nobody on the ball: it is not on or right beside a player (their
+        box widened by GOAL_FREE_BALL_MARGIN of its width each side and
+        extended a little below the feet)."""
+        for x1, y1, x2, y2 in self.people.get(frame, ()):
+            mx = GOAL_FREE_BALL_MARGIN * (x2 - x1)
+            if x1 - mx <= x <= x2 + mx and y1 <= y <= y2 + 0.1 * (y2 - y1):
+                return False
         return True
-    rx1, ry1, rx2, ry2 = rect
-    edges = (
-        (rx1, ry1, rx2, ry1),
-        (rx2, ry1, rx2, ry2),
-        (rx2, ry2, rx1, ry2),
-        (rx1, ry2, rx1, ry1),
-    )
-    for ax, ay, bx, by in edges:
-        if _segments_intersect(x0, y0, x1, y1, ax, ay, bx, by):
-            return True
-    return False
 
 
-def _segments_intersect(x1, y1, x2, y2, x3, y3, x4, y4):
-    def orient(ax, ay, bx, by, cx, cy):
-        return (by - ay) * (cx - ax) - (bx - ax) * (cy - ay)
+def _load_people(coordinate_csv):
+    """people: {frame: [box]}; feet: {(frame, stable_id): (x, y, body height)}."""
+    people, feet = {}, {}
+    if coordinate_csv is None or not Path(coordinate_csv).exists():
+        return people, feet
+    df = pd.read_csv(coordinate_csv)
+    df = df[df["class"] == "person"]
+    for r in df.itertuples(index=False):
+        f = int(r.frame)
+        people.setdefault(f, []).append((r.x1, r.y1, r.x2, r.y2))
+        if pd.notna(r.stable_id):
+            feet[(f, int(r.stable_id))] = ((r.x1 + r.x2) / 2.0, float(r.y2), float(r.y2 - r.y1))
+    return people, feet
 
-    o1 = orient(x1, y1, x2, y2, x3, y3)
-    o2 = orient(x1, y1, x2, y2, x4, y4)
-    o3 = orient(x3, y3, x4, y4, x1, y1)
-    o4 = orient(x3, y3, x4, y4, x2, y2)
-    return (o1 == 0 and o2 == 0) is False and (o1 * o2 <= 0) and (o3 * o4 <= 0)
+
+def _shooter_feet(feet, sid, frame, timing):
+    for d in range(0, timing.shot_window):
+        for f in (frame - d, frame + d):
+            hit = feet.get((f, sid))
+            if hit:
+                return hit
+    return None
 
 
-def _target_goal_for_team(team_id):
-    if team_id not in VALID_TEAMS:
+def _flight(scene, start, end, timing):
+    """Ball positions after the touch, relative to the goal it heads to."""
+    first_ball = None
+    for f in range(start, end + 1):
+        if f in scene.ball:
+            first_ball = (f, scene.ball[f])
+            break
+    if first_ball is None:
         return None
-    defended = TEAM_DEFENDS_GOAL.get(team_id)
-    if defended not in ("left", "right"):
-        return None
-    return "right" if defended == "left" else "left"
+    f0, (bx, by) = first_ball
+    # target: the goal in view closest to the ball at the start of the flight
+    target = None
+    for f in range(f0, min(end, f0 + timing.shot_aim) + 1):
+        boxes = scene.goals.get(f)
+        if boxes and f in scene.ball:
+            x, y = scene.ball[f]
+            target = (f, min(boxes, key=lambda b: _rect_distance(x, y, b) / max(b[3] - b[1], 1.0)))
+            break
+    if target is None:
+        return {"goal_in_view": False}
 
-
-def _ball_xy(row):
-    source = str(row.get("ball_source", "")).strip().lower()
-    if source == "missing":
-        return None
-    if pd.isna(row.get("ball_x")) or pd.isna(row.get("ball_y")):
-        return None
-    return float(row["ball_x"]), float(row["ball_y"]), source
-
-
-def _window_rows(frame_df, start_frame, end_frame):
-    """Inclusive frames after possession end, up to end_frame."""
-    if end_frame <= start_frame:
-        return frame_df.iloc[0:0]
-    return frame_df[
-        (frame_df["frame"] > start_frame) & (frame_df["frame"] <= end_frame)
-    ].sort_values("frame")
-
-
-def _trajectory(window, start_xy):
-    points = []
-    if start_xy is not None:
-        points.append({
-            "frame": None,
-            "x": start_xy[0],
-            "y": start_xy[1],
-            "source": start_xy[2] if len(start_xy) > 2 else "detected",
-        })
-    n = 0
-    missing = 0
-    detected = 0
-    interpolated = 0
-    for _, row in window.iterrows():
-        n += 1
-        xy = _ball_xy(row)
-        source = str(row.get("ball_source", "")).strip().lower()
-        if source == "missing" or xy is None:
-            missing += 1
+    pts = []
+    ref = target[1]
+    for f in range(target[0], end + 1):
+        box = scene.goal_near(f, ref)
+        if box is None:
             continue
-        if source == "detected":
-            detected += 1
-        elif source == "interpolated":
-            interpolated += 1
-        points.append({
-            "frame": int(row["frame"]),
-            "x": xy[0],
-            "y": xy[1],
-            "source": source,
-        })
-    coverage = (detected + interpolated) / n if n else 0.0
-    missing_ratio = missing / n if n else 1.0
-    if len(points) < 2:
-        return {
-            "points": points,
-            "n": n,
-            "missing": missing,
-            "detected": detected,
-            "interpolated": interpolated,
-            "coverage": coverage,
-            "missing_ratio": missing_ratio,
-            "start_x": None,
-            "start_y": None,
-            "end_x": None,
-            "end_y": None,
-            "movement_px": 0.0,
-            "dx": 0.0,
-            "dy": 0.0,
-        }
-    # Prefer first window point as start if we also prepended possession-end ball
-    sx, sy = points[0]["x"], points[0]["y"]
-    ex, ey = points[-1]["x"], points[-1]["y"]
-    dx = ex - sx
-    dy = ey - sy
-    movement = float((dx * dx + dy * dy) ** 0.5)
-    return {
-        "points": points,
-        "n": n,
-        "missing": missing,
-        "detected": detected,
-        "interpolated": interpolated,
-        "coverage": coverage,
-        "missing_ratio": missing_ratio,
-        "start_x": sx,
-        "start_y": sy,
-        "end_x": ex,
-        "end_y": ey,
-        "movement_px": movement,
-        "dx": dx,
-        "dy": dy,
-    }
-
-
-def _approach_stats(traj, goal_rect):
-    valid = [p for p in traj["points"] if p["source"] != "missing"]
-    if not valid:
-        return {
-            "dist_start": None,
-            "dist_end": None,
-            "dist_min": None,
-            "approaches": False,
-            "toward": False,
-            "entered": False,
-            "entered_from_outside": False,
-            "started_inside": False,
-            "inside_run": 0,
-            "intersect": False,
-        }
-    dists = [_point_rect_distance(p["x"], p["y"], goal_rect) for p in valid]
-    dist_start = dists[0]
-    dist_end = dists[-1]
-    dist_min = min(dists)
-    started_inside = _point_in_rect(valid[0]["x"], valid[0]["y"], goal_rect)
-    approaches = (dist_start - dist_min) >= SHOT_MIN_GOAL_APPROACH_PX
-    gx, gy = _rect_center(goal_rect)
-    toward = (traj["dx"] * (gx - traj["start_x"]) + traj["dy"] * (gy - traj["start_y"])) > 0
-    inside_run = 0
-    best_run = 0
-    entered = False
-    for p in valid:
-        # Goal entry evidence uses observed window points, not the possession-end seed.
-        if p.get("frame") is None:
-            continue
-        if _point_in_rect(p["x"], p["y"], goal_rect):
-            entered = True
-            inside_run += 1
-            best_run = max(best_run, inside_run)
+        ref = box
+        gh = max(box[3] - box[1], 1.0)
+        cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        if f in scene.ball:
+            x, y = scene.ball[f]
+            pts.append({
+                "frame": f, "x": x, "y": y, "box": box,
+                "rel": ((x - cx) / gh, (y - cy) / gh),
+                "dist": _rect_distance(x, y, box) / gh,
+                "inside": _inside(x, y, box, GOAL_INSIDE_INSET) and scene.free(f, x, y),
+            })
         else:
-            inside_run = 0
-    entered_from_outside = (not started_inside) and entered
-    if entered_from_outside:
-        toward = True
-        approaches = True
-    intersect = False
-    if traj["start_x"] is not None:
-        intersect = _segment_intersects_rect(
-            traj["start_x"], traj["start_y"], traj["end_x"], traj["end_y"], goal_rect
-        )
-    return {
-        "dist_start": dist_start,
-        "dist_end": dist_end,
-        "dist_min": dist_min,
-        "approaches": approaches,
-        "toward": toward,
-        "entered": entered,
-        "entered_from_outside": entered_from_outside,
-        "started_inside": started_inside,
-        "inside_run": best_run,
-        "intersect": intersect,
-    }
+            pts.append({"frame": f, "box": box, "missing": True})
+    return {"goal_in_view": True, "target": target[1], "points": pts}
 
 
-def _confidence_label(traj, approach, movement_ok):
-    coverage = traj["coverage"]
-    detected_ratio = (traj["detected"] / traj["n"]) if traj["n"] else 0.0
-    movement = traj["movement_px"]
-    if not movement_ok or not approach["toward"] or not approach["approaches"]:
-        return "LOW"
-    if traj["missing_ratio"] > SHOT_MAX_MISSING_BALL_RATIO:
-        return "LOW"
-    if coverage < 0.40:
-        return "LOW"
-    high = (
-        movement >= SHOT_MIN_BALL_MOVEMENT_PX * 1.5
-        and coverage >= 0.55
-        and detected_ratio >= 0.20
-        and approach["approaches"]
-        and approach["toward"]
-    )
-    if high:
-        return "HIGH"
-    return "MEDIUM"
+def _goal_scored(points, timing):
+    """Ball stays in the net, or disappears in it."""
+    seen = [p for p in points if not p.get("missing")]
+    inside = sum(1 for p in seen if p["inside"])
+    if inside >= timing.goal_min_inside:
+        return True, inside
+    # last sighting inside the net, then gone
+    last_inside = None
+    for i, p in enumerate(points):
+        if not p.get("missing"):
+            last_inside = i if p["inside"] else None
+    if last_inside is not None:
+        gone = len(points) - 1 - last_inside
+        if gone >= timing.goal_vanish:
+            return True, inside
+    return False, inside
 
 
-def classify_shot_interval(interval, nxt, teams, frame_df, last_frame):
+def classify_shot(interval, nxt, teams, scene, feet, last_frame, timing):
     shooter = interval["stable_id"]
     team = teams.get(shooter)
-    end_frame = interval["end_frame"]
-    reasons = []
+    end = interval["end_frame"]
+    out = {
+        "frame": end, "time_s": interval.get("end_time_s"), "shooter": shooter, "team": team or "",
+        "accepted": False, "on_target": False, "goal": False, "outcome": "",
+    }
 
-    if shooter is None:
-        return _reject("invalid_shooter", interval, nxt, team, None, None, None, reasons)
+    def reject(reason, **extra):
+        out.update(extra, reason=reason)
+        return out
 
     if team not in VALID_TEAMS:
-        return _reject(
-            "unknown_or_invalid_team",
-            interval,
-            nxt,
-            team,
-            None,
-            None,
-            None,
-            reasons,
-        )
+        return reject("unknown_or_invalid_team")
+    if interval["frames"] < timing.shot_min_possession:
+        return reject("possession_too_short")
 
-    if interval["frames"] < SHOT_MIN_POSSESSION_FRAMES:
-        return _reject(
-            "possession_too_short",
-            interval,
-            nxt,
-            team,
-            _target_goal_for_team(team),
-            None,
-            None,
-            reasons,
-        )
+    shooter_feet = _shooter_feet(feet, shooter, end, timing)
+    ball_at_touch = scene.ball.get(end)
+    if shooter_feet and ball_at_touch:
+        gap_bh = np.hypot(ball_at_touch[0] - shooter_feet[0], ball_at_touch[1] - shooter_feet[1]) / shooter_feet[2]
+        if gap_bh > SHOT_MAX_BALL_TO_SHOOTER_BH:
+            return reject("ball_not_at_shooter")
 
-    target = _target_goal_for_team(team)
-    if target is None:
-        return _reject("no_target_goal", interval, nxt, team, None, None, None, reasons)
+    flight_end = min(end + timing.shot_window, last_frame)
+    # the net check runs a little longer: a ball in the net can vanish
+    net_end = min(flight_end + timing.goal_vanish, last_frame)
+    flight = _flight(scene, end, net_end, timing)
+    if flight is None:
+        return reject("no_ball_after_touch")
+    if not flight["goal_in_view"]:
+        return reject("no_goal_in_view", goal_in_view=False)
+    out["goal_in_view"] = True
+    pts = [p for p in flight["points"] if not p.get("missing")]
+    if len(pts) < 3:
+        return reject("too_few_ball_positions")
 
-    zones = _goal_zones()
-    goal_rect = zones[target]
+    # stop the flight where someone else takes the ball (unless it is in the net)
+    next_start = nxt["start_frame"] if nxt is not None else None
+    in_flight = [p for p in pts if p["frame"] <= flight_end and (next_start is None or p["frame"] < next_start)]
+    if len(in_flight) < 2:
+        in_flight = pts[:2]
 
-    if nxt is not None:
-        next_team = teams.get(nxt["stable_id"])
-        gap = max(0, nxt["start_frame"] - end_frame - 1)
-        if (
-            next_team == team
-            and nxt["stable_id"] != shooter
-            and gap <= PASS_MAX_TRANSITION_FRAMES
-        ):
-            return _reject(
-                "same_team_pass_not_shot",
-                interval,
-                nxt,
-                team,
-                target,
-                None,
-                None,
-                reasons,
-            )
-        window_end = min(
-            end_frame + SHOT_GOAL_APPROACH_WINDOW_FRAMES,
-            nxt["start_frame"] - 1,
-            last_frame,
-        )
+    # drop single-frame jumps (the ball track briefly on another object);
+    # if many points jump, the whole flight is unreliable
+    bh = shooter_feet[2] if shooter_feet else None
+    if bh:
+        kept = [in_flight[0]]
+        for b in in_flight[1:]:
+            a = kept[-1]
+            step = np.hypot(b["rel"][0] - a["rel"][0], b["rel"][1] - a["rel"][1]) * (a["box"][3] - a["box"][1])
+            if step / ((b["frame"] - a["frame"]) / timing.fps) / bh <= SHOT_MAX_SPEED_BH_S:
+                kept.append(b)
+        track_jumps = len(in_flight) - len(kept)
+        in_flight = kept if len(kept) >= 2 else in_flight
     else:
-        window_end = min(end_frame + SHOT_GOAL_APPROACH_WINDOW_FRAMES, last_frame)
+        track_jumps = 0
 
-    if window_end <= end_frame:
-        return _reject(
-            "no_ball_window_after_possession",
-            interval,
-            nxt,
-            team,
-            target,
-            None,
-            None,
-            reasons,
-        )
+    start = in_flight[0]
+    out["start_distance_gh"] = round(start["dist"], 2)
+    if start["inside"] or start["dist"] <= 0.0:
+        return reject("started_in_goal")
+    if start["dist"] > SHOT_MAX_START_GH:
+        return reject("too_far_from_goal")
 
-    start_row = frame_df[frame_df["frame"] == end_frame]
-    start_xy = None
-    if len(start_row):
-        start_xy = _ball_xy(start_row.iloc[0])
-        if start_xy is not None:
-            start_xy = (start_xy[0], start_xy[1], start_xy[2])
+    aim = [p for p in in_flight if p["frame"] <= start["frame"] + timing.shot_aim]
+    if len(aim) < 2:
+        aim = in_flight[:2]
+    p0, p1 = np.array(aim[0]["rel"]), np.array(aim[-1]["rel"])
+    dt = (aim[-1]["frame"] - aim[0]["frame"]) / timing.fps
+    gh = aim[0]["box"][3] - aim[0]["box"][1]
+    speed = float(np.linalg.norm(p1 - p0)) * gh / dt / bh if (bh and dt > 0) else 0.0
+    out["speed_bh_s"] = round(speed, 2)
+    unreliable = track_jumps > 0.25 * (len(in_flight) + track_jumps) or speed > SHOT_MAX_SPEED_BH_S
 
-    window = _window_rows(frame_df, end_frame, window_end)
-    early_end = min(end_frame + SHOT_MAX_TRANSITION_FRAMES, window_end)
-    early_window = _window_rows(frame_df, end_frame, early_end)
-    traj = _trajectory(early_window if len(early_window) else window, start_xy)
-    # Approach uses the longer goal-approach window
-    full_traj = _trajectory(window, start_xy)
-    if full_traj["n"] > traj["n"]:
-        # keep early movement, but merge later points for approach/goal
-        approach_traj = full_traj
-        approach_traj["movement_px"] = max(traj["movement_px"], full_traj["movement_px"])
-        approach_traj["dx"] = full_traj["dx"]
-        approach_traj["dy"] = full_traj["dy"]
-        approach_traj["start_x"] = traj["start_x"] if traj["start_x"] is not None else full_traj["start_x"]
-        approach_traj["start_y"] = traj["start_y"] if traj["start_y"] is not None else full_traj["start_y"]
-        approach_traj["end_x"] = full_traj["end_x"]
-        approach_traj["end_y"] = full_traj["end_y"]
+    box = start["box"]
+    w_gh = (box[2] - box[0]) / max(box[3] - box[1], 1.0)
+    offset = _aim_offset(p0, p1 - p0, w_gh, 1.0)
+    out["aim_offset"] = "" if offset is None else offset
+    # direction of travel vs direction to the goal centre (the box test alone
+    # passes anything that starts close to the goal)
+    v, to_goal = p1 - p0, -p0
+    norm = float(np.linalg.norm(v) * np.linalg.norm(to_goal))
+    angle = float(np.degrees(np.arccos(np.clip(v @ to_goal / norm, -1.0, 1.0)))) if norm > 0 else 180.0
+    min_dist = min(p["dist"] for p in in_flight)
+    out["min_distance_gh"] = round(min_dist, 2)
+
+    scored, inside = _goal_scored(flight["points"], timing)
+    out["inside_frames"] = inside
+    # a goal still needs a real strike toward the goal on a clean ball track
+    if scored and (angle >= 90.0 or unreliable):
+        scored = False
+
+    next_team = teams.get(nxt["stable_id"]) if nxt is not None else None
+    gap = (nxt["start_frame"] - end - 1) if nxt is not None else None
+    # a teammate who collects a rebound after the ball reached the goal did
+    # not receive a pass
+    reached = next((p["frame"] for p in pts if p["dist"] <= 0.5), None)
+    to_teammate = (
+        next_team == team and nxt["stable_id"] != shooter and gap is not None and gap <= timing.pass_max_transition
+        and (reached is None or nxt["start_frame"] < reached)
+    )
+
+    if not scored:
+        if to_teammate:
+            return reject("pass_to_teammate")
+        if speed < SHOT_MIN_SPEED_BH_S:
+            return reject("not_struck")
+        if unreliable:
+            return reject("ball_track_jump")
+        # straight at the box and moving toward it, or roughly toward the
+        # goal centre and within the wide-shot margin
+        at_box = offset == 0.0 and angle < 90.0
+        if not at_box and (angle > SHOT_MAX_AIM_ANGLE_DEG or offset is None or offset > SHOT_AIM_MARGIN):
+            return reject("not_aimed_at_goal")
+        if min_dist > start["dist"] - SHOT_MIN_APPROACH_GH:
+            return reject("does_not_approach_goal")
+    stopped_by_opponent = (
+        next_team in VALID_TEAMS and next_team != team and gap is not None and gap <= timing.shot_window
+    )
+    near = min_dist <= SHOT_NEAR_GOAL_GH
+    if not (scored or near or stopped_by_opponent):
+        return reject("did_not_reach_goal")
+
+    saved_near_goal = stopped_by_opponent and near
+    on_target = scored or (offset == 0.0 and (min_dist <= 0.3 or saved_near_goal))
+    if scored:
+        outcome = "goal"
+    elif on_target:
+        outcome = "saved" if stopped_by_opponent else "on_target"
+    elif stopped_by_opponent and not near:
+        outcome = "blocked"
     else:
-        approach_traj = traj
+        outcome = "off_target"
 
-    if approach_traj["start_x"] is None or approach_traj["end_x"] is None:
-        return _reject(
-            "insufficient_ball_positions",
-            interval,
-            nxt,
-            team,
-            target,
-            approach_traj,
-            None,
-            reasons,
-        )
-
-    if approach_traj["n"] > 0 and approach_traj["missing_ratio"] > 0.80:
-        return _reject(
-            "too_many_missing_ball_frames",
-            interval,
-            nxt,
-            team,
-            target,
-            approach_traj,
-            None,
-            reasons,
-        )
-
-    movement_ok = approach_traj["movement_px"] >= SHOT_MIN_BALL_MOVEMENT_PX
-    if not movement_ok:
-        return _reject(
-            "ball_movement_too_small",
-            interval,
-            nxt,
-            team,
-            target,
-            approach_traj,
-            None,
-            reasons,
-        )
-
-    approach = _approach_stats(approach_traj, goal_rect)
-    if approach.get("started_inside"):
-        return _reject(
-            "ball_already_in_target_goal",
-            interval,
-            nxt,
-            team,
-            target,
-            approach_traj,
-            approach,
-            reasons,
-        )
-    if not approach["toward"]:
-        return _reject(
-            "not_toward_opponent_goal",
-            interval,
-            nxt,
-            team,
-            target,
-            approach_traj,
-            approach,
-            reasons,
-        )
-    if not approach["approaches"]:
-        return _reject(
-            "does_not_approach_goal",
-            interval,
-            nxt,
-            team,
-            target,
-            approach_traj,
-            approach,
-            reasons,
-        )
-
-    confidence = _confidence_label(approach_traj, approach, movement_ok)
-    if confidence == "LOW":
-        return _reject(
-            "low_confidence",
-            interval,
-            nxt,
-            team,
-            target,
-            approach_traj,
-            approach,
-            reasons,
-            confidence="LOW",
-        )
-
-    on_target = _on_target(approach, approach_traj, goal_rect)
-    is_goal = False
-    goal_reason = ""
-    if on_target is True:
-        if (
-            approach.get("entered_from_outside")
-            and approach["inside_run"] >= SHOT_GOAL_INSIDE_FRAMES
-        ):
-            is_goal = True
-            goal_reason = "ball_inside_goal_zone"
-        else:
-            goal_reason = "on_target_but_no_goal_entry"
-    else:
-        goal_reason = "not_on_target"
-
-    transition_frames = max(0, (window_end - end_frame))
-    return {
-        "accepted": True,
-        "candidate_type": "shot",
-        "reason": goal_reason,
-        "confidence": confidence,
-        "on_target": on_target,
-        "goal": is_goal,
-        "shooter": shooter,
-        "team": team,
-        "target_goal": target,
-        "interval": interval,
-        "traj": approach_traj,
-        "approach": approach,
-        "transition_frames": transition_frames,
-        "window_end": window_end,
-    }
+    confidence = "HIGH" if (scored or (offset == 0.0 and speed >= 1.5 * SHOT_MIN_SPEED_BH_S)) else "MEDIUM"
+    out.update(
+        accepted=True, on_target=bool(on_target), goal=bool(scored), outcome=outcome, reason=outcome,
+        confidence=confidence, target=flight["target"], ball_start=(start["x"], start["y"]),
+    )
+    return out
 
 
-def _on_target(approach, traj, goal_rect):
-    if approach.get("entered_from_outside"):
-        return True
-    if approach["intersect"] and approach.get("toward"):
-        return True
-    if (
-        approach["dist_min"] is not None
-        and approach["dist_min"] <= SHOT_ON_TARGET_MAX_DIST_PX
-        and approach.get("toward")
-        and approach.get("approaches")
-    ):
-        return True
-    return False
-
-
-def _reject(reason, interval, nxt, team, target, traj, approach, reasons, confidence="LOW"):
-    dist = None
-    movement = None
-    coverage = None
-    if traj:
-        movement = traj.get("movement_px")
-        coverage = traj.get("coverage")
-    if approach and approach.get("dist_min") is not None:
-        dist = approach["dist_min"]
-    return {
-        "accepted": False,
-        "candidate_type": "shot_candidate",
-        "reason": reason,
-        "confidence": confidence,
-        "on_target": False,
-        "goal": False,
-        "shooter": interval["stable_id"],
-        "team": team,
-        "target_goal": target,
-        "interval": interval,
-        "traj": traj,
-        "approach": approach,
-        "transition_frames": max(
-            0,
-            (nxt["start_frame"] - interval["end_frame"] - 1) if nxt is not None else 0,
-        ),
-        "goal_distance": dist,
-        "movement_px": movement,
-        "coverage": coverage,
-    }
-
-
-def detect_shots(frame_state_csv, teams_csv, fps):
+def detect_shots(frame_state_csv, teams_csv, fps, goals_csv, coordinate_csv=None):
+    timing = EventTiming(fps)
     frame_df = pd.read_csv(frame_state_csv)
     teams = _load_teams(teams_csv)
-    intervals = _confirmed_intervals(frame_df)
+    intervals = _confirmed_intervals(frame_df, timing.possession_merge_gap)
     last_frame = int(frame_df["frame"].max()) if len(frame_df) else 0
+    goals = load_goals(goals_csv) or {}
+    people, feet = _load_people(coordinate_csv)
+    scene = _Scene(frame_df, goals, people)
 
-    validation = []
-    shots = []
-    event_id = 1
-    counts = {
-        "confirmed_intervals": len(intervals),
-        "shot_candidates": 0,
-        "confirmed_shots": 0,
-        "shots_on_target": 0,
-        "goals": 0,
-        "rejected": 0,
-        "rejected_reasons": {},
-    }
-
-    seen_keys = set()
-
+    shots, validation = [], []
+    counts = {"confirmed_intervals": len(intervals), "confirmed_shots": 0, "shots_on_target": 0,
+              "goals": 0, "rejected_reasons": {}}
+    busy_until = -1
     for i, interval in enumerate(intervals):
         nxt = intervals[i + 1] if i + 1 < len(intervals) else None
-        counts["shot_candidates"] += 1
-        result = classify_shot_interval(interval, nxt, teams, frame_df, last_frame)
-        traj = result.get("traj") or {}
-        approach = result.get("approach") or {}
-        key = (interval["end_frame"], interval["stable_id"])
-        duplicate = key in seen_keys
-        seen_keys.add(key)
-
-        on_target_out = result["on_target"]
-        if on_target_out is True:
-            on_target_csv = True
-        elif result["accepted"]:
-            on_target_csv = False
-        else:
-            on_target_csv = False
-
-        if duplicate:
-            result["accepted"] = False
-            result["reason"] = "duplicate_shot_event"
-            result["goal"] = False
-            on_target_csv = False
-
-        val = {
-            "frame": interval["end_frame"],
-            "shooter": interval["stable_id"],
-            "team": result.get("team") or "",
-            "candidate_type": result["candidate_type"],
-            "accepted": result["accepted"],
-            "on_target": on_target_csv if result["accepted"] else False,
-            "goal": bool(result["goal"]) if result["accepted"] else False,
-            "confidence": result["confidence"],
-            "reason": result["reason"],
-            "ball_coverage": round(traj.get("coverage") or 0.0, 3) if traj else "",
-            "movement_px": round(traj.get("movement_px") or 0.0, 1) if traj else "",
-            "target_goal": result.get("target_goal") or "",
-            "goal_distance": (
-                round(approach["dist_min"], 1)
-                if approach and approach.get("dist_min") is not None
-                else ""
-            ),
-        }
-        validation.append(val)
-
-        if not result["accepted"]:
-            counts["rejected"] += 1
-            counts["rejected_reasons"][result["reason"]] = (
-                counts["rejected_reasons"].get(result["reason"], 0) + 1
-            )
+        r = classify_shot(interval, nxt, teams, scene, feet, last_frame, timing)
+        if r["accepted"] and interval["end_frame"] <= busy_until:
+            # possession flicker around one strike: the first touch is the shot
+            r.update(accepted=False, on_target=False, goal=False, outcome="", reason="duplicate_of_previous_shot")
+        validation.append(r)
+        if not r["accepted"]:
+            counts["rejected_reasons"][r["reason"]] = counts["rejected_reasons"].get(r["reason"], 0) + 1
             continue
-
-        # Sanity: no goal without shot; no goal without on-target
-        is_goal = bool(result["goal"]) and on_target_csv is True
-        shot_row = {
-            "event_id": event_id,
+        busy_until = interval["end_frame"] + timing.shot_window
+        tx1, ty1, tx2, ty2 = r["target"]
+        shots.append({
+            "event_id": len(shots) + 1,
             "frame": interval["end_frame"],
             "time_s": round(interval["end_time_s"], 4) if interval["end_time_s"] is not None else "",
             "shooter_stable_id": interval["stable_id"],
-            "team_id": result["team"],
-            "target_goal": result["target_goal"],
-            "ball_start_x": round(traj["start_x"], 1) if traj.get("start_x") is not None else "",
-            "ball_start_y": round(traj["start_y"], 1) if traj.get("start_y") is not None else "",
-            "ball_end_x": round(traj["end_x"], 1) if traj.get("end_x") is not None else "",
-            "ball_end_y": round(traj["end_y"], 1) if traj.get("end_y") is not None else "",
-            "ball_movement_px": round(traj.get("movement_px") or 0.0, 1),
-            "transition_frames": result.get("transition_frames") or 0,
-            "confidence": result["confidence"],
-            "on_target": on_target_csv,
-            "goal": is_goal,
-        }
-        shots.append(shot_row)
+            "team_id": r["team"],
+            "target_goal": f"{tx1:.0f},{ty1:.0f},{tx2:.0f},{ty2:.0f}",
+            "ball_start_x": round(r["ball_start"][0], 1),
+            "ball_start_y": round(r["ball_start"][1], 1),
+            "start_distance_gh": r.get("start_distance_gh", ""),
+            "speed_bh_s": r.get("speed_bh_s", ""),
+            "min_distance_gh": r.get("min_distance_gh", ""),
+            "confidence": r["confidence"],
+            "on_target": r["on_target"],
+            "goal": r["goal"],
+            "outcome": r["outcome"],
+        })
         counts["confirmed_shots"] += 1
-        if on_target_csv:
-            counts["shots_on_target"] += 1
-        if is_goal:
-            counts["goals"] += 1
-        event_id += 1
-
-    return intervals, shots, validation, counts, fps
+        counts["shots_on_target"] += int(r["on_target"])
+        counts["goals"] += int(r["goal"])
+    return shots, validation, counts
 
 
-def _write_shooting_stats(shots, teams, suffix):
+def _write_shooting_stats(shots, suffix):
     tag = f"_{suffix}" if suffix else ""
     team_totals = {tid: {"shots": 0, "shots_on_target": 0, "goals": 0} for tid in ("team_a", "team_b")}
     player_totals = {}
     for shot in shots:
-        team = shot["team_id"]
-        sid = shot["shooter_stable_id"]
-        if team in team_totals:
-            team_totals[team]["shots"] += 1
-            if shot["on_target"] is True:
-                team_totals[team]["shots_on_target"] += 1
-            if shot["goal"] is True:
-                team_totals[team]["goals"] += 1
-        if sid not in player_totals:
-            player_totals[sid] = {
-                "stable_id": sid,
-                "team_id": team,
-                "shots": 0,
-                "shots_on_target": 0,
-                "goals": 0,
-            }
-        player_totals[sid]["shots"] += 1
-        if shot["on_target"] is True:
-            player_totals[sid]["shots_on_target"] += 1
-        if shot["goal"] is True:
-            player_totals[sid]["goals"] += 1
-
-    team_rows = [
-        {"team_id": tid, **team_totals[tid]} for tid in ("team_a", "team_b")
-    ]
-    player_rows = [player_totals[sid] for sid in sorted(player_totals)]
+        team, sid = shot["team_id"], shot["shooter_stable_id"]
+        p = player_totals.setdefault(sid, {"stable_id": sid, "team_id": team, "shots": 0, "shots_on_target": 0, "goals": 0})
+        for totals in ([team_totals[team]] if team in team_totals else []) + [p]:
+            totals["shots"] += 1
+            totals["shots_on_target"] += int(shot["on_target"] is True)
+            totals["goals"] += int(shot["goal"] is True)
     team_path = _write_csv(
         ANALYTICS_DIR / f"team_shooting_stats{tag}.csv",
-        team_rows,
+        [{"team_id": tid, **team_totals[tid]} for tid in ("team_a", "team_b")],
         ["team_id", "shots", "shots_on_target", "goals"],
     )
     player_path = _write_csv(
         ANALYTICS_DIR / f"player_shooting_stats{tag}.csv",
-        player_rows,
+        [player_totals[sid] for sid in sorted(player_totals)],
         ["stable_id", "team_id", "shots", "shots_on_target", "goals"],
     )
     return team_path, player_path
 
 
-def write_shot_validation_video(
-    video_path,
-    frame_state_csv,
-    shots,
-    validation,
-    output_path,
-):
+def write_shot_validation_video(video_path, frame_state_csv, goals_csv, shots, output_path):
+    """Goal boxes, ball and shot labels over the source video."""
     frame_df = pd.read_csv(frame_state_csv)
-    state_by_frame = {int(r["frame"]): r for _, r in frame_df.iterrows()}
+    balls = {
+        int(r.frame): (int(r.ball_x), int(r.ball_y))
+        for r in frame_df.itertuples(index=False)
+        if str(r.ball_source).strip().lower() != "missing" and pd.notna(r.ball_x)
+    }
+    goals = load_goals(goals_csv) or {}
     shot_by_frame = {int(s["frame"]): s for s in shots}
-    cand_by_frame = {}
-    for row in validation:
-        cand_by_frame.setdefault(int(row["frame"]), []).append(row)
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    min_frame = int(frame_df["frame"].min())
-    max_frame = int(frame_df["frame"].max())
+    min_frame, max_frame = int(frame_df["frame"].min()), int(frame_df["frame"].max())
     cap.set(cv2.CAP_PROP_POS_FRAMES, max(min_frame - 1, 0))
-
-    writer = cv2.VideoWriter(
-        str(output_path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        fps,
-        (width, height),
-    )
+    writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
     if not writer.isOpened():
         cap.release()
         raise RuntimeError(f"Cannot write video: {output_path}")
 
-    zones = _goal_zones()
-    active_label = None
-    active_until = -1
-
-    frame_index = min_frame
-    while frame_index <= max_frame:
-        ret, image = cap.read()
-        if not ret:
+    label, until = None, -1
+    for frame_index in range(min_frame, max_frame + 1):
+        ok, image = cap.read()
+        if not ok:
             break
-
-        lx1, ly1, lx2, ly2 = zones["left"]
-        rx1, ry1, rx2, ry2 = zones["right"]
-        cv2.rectangle(image, (lx1, ly1), (lx2, ly2), (0, 200, 255), 2)
-        cv2.putText(
-            image, "goal L", (lx1, max(20, ly1 - 8)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2, cv2.LINE_AA,
-        )
-        cv2.rectangle(image, (rx1, ry1), (rx2, ry2), (255, 200, 0), 2)
-        cv2.putText(
-            image, "goal R", (rx1, max(20, ry1 - 8)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2, cv2.LINE_AA,
-        )
-
-        state = state_by_frame.get(frame_index)
-        if state is not None and pd.notna(state.get("ball_x")) and pd.notna(state.get("ball_y")):
-            source = str(state.get("ball_source", "")).strip().lower()
-            if source != "missing":
-                bx, by = int(state["ball_x"]), int(state["ball_y"])
-                color = (0, 255, 255) if source == "detected" else (255, 255, 0)
-                cv2.circle(image, (bx, by), 8, color, -1)
-
+        for x1, y1, x2, y2 in goals.get(frame_index, ()):
+            cv2.rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), (255, 200, 0), 2)
+        if frame_index in balls:
+            cv2.circle(image, balls[frame_index], 8, (0, 255, 255), -1)
         if frame_index in shot_by_frame:
             s = shot_by_frame[frame_index]
-            label = "SHOT"
-            if s["on_target"] is True:
-                label = "ON TARGET"
-            if s["goal"] is True:
-                label = "GOAL"
-            active_label = (
-                f"{label} id={s['shooter_stable_id']} {s['team_id']} -> {s['target_goal']} {s['confidence']}"
-            )
-            active_until = frame_index + int(fps * 2)
-        elif frame_index in cand_by_frame and frame_index not in shot_by_frame:
-            c = cand_by_frame[frame_index][0]
-            if not c["accepted"]:
-                active_label = f"CAND reject {c['reason']} sid={c['shooter']}"
-                active_until = frame_index + int(fps * 1.2)
-
-        if active_label and frame_index <= active_until:
-            cv2.putText(
-                image, active_label, (30, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA,
-            )
-
+            label = f"{s['outcome'].upper()}  id={s['shooter_stable_id']} {s['team_id']}  {s['confidence']}"
+            until = frame_index + int(fps * 2)
+        if label and frame_index <= until:
+            cv2.putText(image, label, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 255), 3, cv2.LINE_AA)
         writer.write(image)
-        frame_index += 1
-
     cap.release()
     writer.release()
     return output_path
 
 
-def run_shot_detection(frame_state_csv, teams_csv, video_path, suffix=""):
+def run_shot_detection(frame_state_csv, teams_csv, video_path, goals_csv, coordinate_csv=None, suffix=""):
     EVENTS_OUTPUT.mkdir(parents=True, exist_ok=True)
     ANALYTICS_DIR.mkdir(parents=True, exist_ok=True)
     fps = _video_fps(video_path)
     tag = f"_{suffix}" if suffix else ""
 
-    _, shots, validation, counts, fps = detect_shots(
-        frame_state_csv, teams_csv, fps
-    )
-    teams = _load_teams(teams_csv)
-
-    shots_path = EVENTS_OUTPUT / f"shots{tag}.csv"
-    val_path = EVENTS_OUTPUT / f"shot_validation{tag}.csv"
-    _write_csv(
-        shots_path,
-        shots,
-        [
-            "event_id",
-            "frame",
-            "time_s",
-            "shooter_stable_id",
-            "team_id",
-            "target_goal",
-            "ball_start_x",
-            "ball_start_y",
-            "ball_end_x",
-            "ball_end_y",
-            "ball_movement_px",
-            "transition_frames",
-            "confidence",
-            "on_target",
-            "goal",
-        ],
-    )
-    _write_csv(
-        val_path,
-        validation,
-        [
-            "frame",
-            "shooter",
-            "team",
-            "candidate_type",
-            "accepted",
-            "on_target",
-            "goal",
-            "confidence",
-            "reason",
-            "ball_coverage",
-            "movement_px",
-            "target_goal",
-            "goal_distance",
-        ],
-    )
-    team_path, player_path = _write_shooting_stats(shots, teams, suffix)
+    shots, validation, counts = detect_shots(frame_state_csv, teams_csv, fps, goals_csv, coordinate_csv)
+    shots_path = _write_csv(EVENTS_OUTPUT / f"shots{tag}.csv", shots, SHOT_FIELDS)
+    val_path = _write_csv(EVENTS_OUTPUT / f"shot_validation{tag}.csv", validation, VALIDATION_FIELDS)
+    team_path, player_path = _write_shooting_stats(shots, suffix)
 
     video_out = None
-    if SHOT_WRITE_VALIDATION_VIDEO:
+    if WRITE_DEBUG_VIDEOS:
         video_out = EVENTS_OUTPUT / f"shot_validation{tag}.mp4"
-        write_shot_validation_video(
-            video_path, frame_state_csv, shots, validation, video_out
-        )
+        write_shot_validation_video(video_path, frame_state_csv, goals_csv, shots, video_out)
 
     by_team = {"team_a": 0, "team_b": 0}
     for s in shots:
         if s["team_id"] in by_team:
             by_team[s["team_id"]] += 1
 
-    print("Shot detection (MVP, camera-pixel, stable_id-level):")
-    print(f"  FPS                            : {fps:.4f}")
-    print(f"  SHOT_MAX_TRANSITION_FRAMES     : {SHOT_MAX_TRANSITION_FRAMES}")
-    print(f"  SHOT_MIN_BALL_MOVEMENT_PX      : {SHOT_MIN_BALL_MOVEMENT_PX}")
-    print(f"  SHOT_GOAL_APPROACH_WINDOW      : {SHOT_GOAL_APPROACH_WINDOW_FRAMES}")
-    print(f"  GOAL_ZONE_LEFT                 : {GOAL_ZONE_LEFT}")
-    print(f"  GOAL_ZONE_RIGHT                : {GOAL_ZONE_RIGHT}")
-    print(f"  TEAM_DEFENDS_GOAL              : {TEAM_DEFENDS_GOAL}")
-    print(f"  confirmed intervals            : {counts['confirmed_intervals']}")
-    print(f"  shot candidates                : {counts['shot_candidates']}")
-    print(f"  confirmed shots                : {counts['confirmed_shots']}")
-    print(f"  shots by team                  : {by_team}")
-    print(f"  shots on target                : {counts['shots_on_target']}")
-    print(f"  goals                          : {counts['goals']}")
-    print(f"  rejected candidates            : {counts['rejected']}")
-    print(f"  rejection reasons              : {counts['rejected_reasons']}")
-    print(f"  shots CSV                      : {shots_path}")
-    print(f"  validation CSV                 : {val_path}")
-    if video_out:
-        print(f"  validation video               : {video_out}")
+    print("Shot detection (goals detected in video):")
+    print(f"  FPS                 : {fps:.4f}")
+    print(f"  confirmed intervals : {counts['confirmed_intervals']}")
+    print(f"  shots               : {counts['confirmed_shots']} {by_team}")
+    print(f"  shots on target     : {counts['shots_on_target']}")
+    print(f"  goals               : {counts['goals']}")
+    print(f"  rejection reasons   : {counts['rejected_reasons']}")
+    print(f"  shots CSV           : {shots_path}")
 
     return {
         "counts": counts,
@@ -902,5 +545,4 @@ def run_shot_detection(frame_state_csv, teams_csv, video_path, suffix=""):
         "validation_video": video_out,
         "fps": fps,
         "by_team": by_team,
-        "goal_zones": _goal_zones(),
     }
