@@ -1,5 +1,5 @@
 import type { MatchStats } from "../types/matchStats";
-import { apiFetch, readError } from "./client";
+import { apiFetch, getToken, readError } from "./client";
 
 export interface MatchRecord {
   match_id: string;
@@ -28,19 +28,39 @@ export async function getMatchStats(matchId: string): Promise<MatchStats> {
   return response.json() as Promise<MatchStats>;
 }
 
-export async function uploadMatchVideo(file: File): Promise<{
+export interface UploadResult {
   match_id: string;
   filename: string;
   status: string;
   bytes: number;
-}> {
-  const body = new FormData();
-  body.append("file", file);
-  const response = await apiFetch("/api/matches/upload", { method: "POST", body });
-  if (!response.ok) {
-    throw new Error(await readError(response, "Upload failed"));
-  }
-  return response.json();
+}
+
+// XMLHttpRequest rather than fetch: fetch cannot report upload progress, and
+// match files can be several GB.
+export function uploadMatchVideo(file: File, onProgress?: (fraction: number) => void): Promise<UploadResult> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/matches/upload");
+    const token = getToken();
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      let data: { detail?: unknown } & Partial<UploadResult> = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        /* non-JSON error body */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data as UploadResult);
+      else reject(new Error(typeof data.detail === "string" ? data.detail : "Upload failed"));
+    };
+    xhr.onerror = () => reject(new Error("Upload failed: the server could not be reached"));
+    const body = new FormData();
+    body.append("file", file);
+    xhr.send(body);
+  });
 }
 
 export async function startAnalysis(
@@ -83,6 +103,17 @@ export async function listMatches(): Promise<{ matches: MatchRecord[] }> {
   const response = await apiFetch("/api/matches");
   if (!response.ok) {
     throw new Error("Could not load matches");
+  }
+  return response.json();
+}
+
+export async function getMatchMedia(matchId: string): Promise<{
+  source_video: boolean;
+  analysis_video: boolean;
+}> {
+  const response = await apiFetch(`/api/matches/${matchId}/media`);
+  if (!response.ok) {
+    throw new Error("Could not load media info");
   }
   return response.json();
 }

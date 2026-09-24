@@ -23,7 +23,7 @@ export function videoLabel(path: string | undefined): string {
 }
 
 export function playerLabel(stableId: number): string {
-  return `Player #${stableId}`;
+  return `Player ${stableId}`;
 }
 
 export function boolLabel(value: boolean | null | undefined): string {

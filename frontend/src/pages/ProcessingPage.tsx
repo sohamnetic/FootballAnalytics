@@ -1,16 +1,46 @@
-import { useEffect, useState } from "react";
+import { Check, CircleAlert, RotateCcw, Upload } from "lucide-react";
+import { motion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getMatch, getMatchStatus, startAnalysis } from "../api/getMatchStats";
-import { ProductNav } from "../components/ProductNav";
+import { FlowSteps } from "../components/layout/FlowSteps";
+import { PageShell } from "../components/layout/PageShell";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
+import { Spinner } from "../components/ui/Spinner";
+import { cn } from "../lib/cn";
+
+// Mirrors STAGE_PROGRESS in app/jobs.py: progress at which each stage starts.
+const STAGES: [string, number][] = [
+  ["Preparing video", 5],
+  ["Detecting & tracking players", 12],
+  ["Detecting the ball", 40],
+  ["Calculating possession", 55],
+  ["Assigning teams", 65],
+  ["Passes & turnovers", 72],
+  ["Shots", 90],
+  ["Building your dashboard", 98],
+];
+
+function formatElapsed(ms: number) {
+  const s = Math.floor(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 
 export function ProcessingPage() {
   const { matchId } = useParams();
   const navigate = useNavigate();
   const [progress, setProgress] = useState(0);
-  const [stage, setStage] = useState("Queued");
   const [status, setStatus] = useState("queued");
-  const [message, setMessage] = useState("Analyzing match footage...");
-  const [kind, setKind] = useState("stage-based");
+  const [message, setMessage] = useState("");
+  const [retrying, setRetrying] = useState(false);
+  const started = useRef(Date.now());
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (!matchId) return;
@@ -20,13 +50,9 @@ export function ProcessingPage() {
         const row = await getMatchStatus(matchId!);
         if (stop) return;
         setProgress(row.progress ?? 0);
-        setStage(row.stage || row.status);
         setStatus(row.status);
         setMessage(row.message || "");
-        setKind(row.progress_kind || "stage-based");
-        if (row.status === "completed") {
-          navigate(`/matches/${matchId}`);
-        }
+        if (row.status === "completed") navigate(`/matches/${matchId}`);
       } catch {
         if (!stop) setStatus("failed");
       }
@@ -41,57 +67,134 @@ export function ProcessingPage() {
 
   async function retry() {
     if (!matchId) return;
-    const row = await getMatch(matchId);
-    await startAnalysis(matchId, {
-      team_a: row.team_a || "Team A",
-      team_b: row.team_b || "Team B",
-      camera: row.camera || "Camera 001",
-      analysis: row.analysis === "window" ? "window" : "full",
-      start_time_s: row.start_time_s,
-      duration_s: row.duration_s,
-    });
-    setStatus("queued");
+    setRetrying(true);
+    try {
+      const row = await getMatch(matchId);
+      await startAnalysis(matchId, {
+        team_a: row.team_a || "Team A",
+        team_b: row.team_b || "Team B",
+        camera: row.camera || "Camera 001",
+        analysis: row.analysis === "window" ? "window" : "full",
+        start_time_s: row.start_time_s,
+        duration_s: row.duration_s,
+      });
+      started.current = Date.now();
+      setProgress(0);
+      setStatus("queued");
+    } finally {
+      setRetrying(false);
+    }
   }
 
   if (status === "failed") {
     return (
-      <div className="app">
-        <ProductNav />
-        <section className="panel form-panel">
-          <div className="kicker">Analysis failed</div>
-          <h1>We couldn't complete analysis for this match.</h1>
-          <p className="muted">{message}</p>
-          <div className="hero-actions">
-            <button className="btn primary" type="button" onClick={retry}>
-              Try Again
-            </button>
-            <Link className="btn ghost" to="/upload">
-              Upload Another Video
-            </Link>
+      <PageShell className="max-w-xl">
+        <Card className="mt-16 p-8 text-center">
+          <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-rose-500/10 text-rose-300 ring-1 ring-rose-400/25 [&_svg]:size-7">
+            <CircleAlert />
           </div>
-        </section>
-      </div>
+          <h1 className="mt-6 text-2xl font-semibold tracking-tight text-white">We couldn't finish this analysis</h1>
+          <p className="mt-2 text-sm leading-relaxed text-zinc-400">{message || "Something went wrong while processing the video."}</p>
+          <div className="mt-8 flex flex-wrap justify-center gap-3">
+            <Button loading={retrying} onClick={retry}>
+              <RotateCcw /> Try again
+            </Button>
+            <Button asChild variant="secondary">
+              <Link to="/upload">
+                <Upload /> Upload another video
+              </Link>
+            </Button>
+          </div>
+        </Card>
+      </PageShell>
     );
   }
 
+  const pct = Math.min(100, Math.max(0, progress));
+  const currentIndex = STAGES.reduce((acc, [, at], i) => (pct >= at ? i : acc), -1);
+  const R = 52;
+  const C = 2 * Math.PI * R;
+
   return (
-    <div className="app">
-      <ProductNav />
-      <section className="panel form-panel">
-        <div className="kicker">Live pipeline</div>
-        <h1>Analyzing match</h1>
-        <div className="progress-track" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
-          <i style={{ width: `${Math.max(progress, 3)}%` }} />
+    <PageShell className="max-w-3xl">
+      <FlowSteps current={2} />
+      <div className="grid items-center gap-10 pt-12 md:grid-cols-[auto_1fr]">
+        <div className="relative mx-auto size-52">
+          <div aria-hidden="true" className="absolute inset-6 rounded-full bg-pitch-400/15 blur-2xl" />
+          <svg viewBox="0 0 120 120" className="relative size-full -rotate-90">
+            <circle cx="60" cy="60" r={R} fill="none" stroke="rgb(255 255 255 / 0.06)" strokeWidth="8" />
+            <motion.circle
+              cx="60"
+              cy="60"
+              r={R}
+              fill="none"
+              stroke="url(#ring)"
+              strokeWidth="8"
+              strokeLinecap="round"
+              strokeDasharray={C}
+              animate={{ strokeDashoffset: C * (1 - Math.max(pct, 2) / 100) }}
+              transition={{ duration: 0.8, ease: "easeOut" }}
+            />
+            <defs>
+              <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="#7eecc0" />
+                <stop offset="1" stopColor="#1cc488" />
+              </linearGradient>
+            </defs>
+          </svg>
+          <div className="absolute inset-0 grid place-items-center text-center">
+            <div>
+              <p className="font-mono text-4xl font-semibold text-white tabular">{Math.round(pct)}%</p>
+              <p className="mt-1 font-mono text-[12px] text-zinc-500 tabular">{formatElapsed(now - started.current)} elapsed</p>
+            </div>
+          </div>
         </div>
-        <div className="progress-meta">
-          <strong>{progress}%</strong>
-          <span>Stage-based progress</span>
+
+        <div>
+          <p className="text-[12px] font-medium tracking-[0.18em] text-pitch-400 uppercase">
+            {status === "queued" ? "Queued" : "Analyzing"}
+          </p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white">Working on your match</h1>
+          <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+            You can leave this page. Analysis keeps running, and the match will be waiting in{" "}
+            <Link to="/matches" className="text-pitch-300 hover:text-pitch-200">
+              your matches
+            </Link>
+            .
+          </p>
         </div>
-        <p>
-          Current stage: <strong>{stage}</strong>
-        </p>
-        <p className="muted">{message} ({kind})</p>
-      </section>
-    </div>
+      </div>
+
+      <Card className="mt-10 p-2">
+        <ol>
+          {STAGES.map(([label], i) => {
+            const done = i < currentIndex || pct >= 100;
+            const active = i === currentIndex && pct < 100;
+            return (
+              <li
+                key={label}
+                className={cn("flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition-colors", active && "bg-pitch-400/[0.06]")}
+              >
+                <span
+                  className={cn(
+                    "grid size-6 shrink-0 place-items-center rounded-full [&_svg]:size-3.5",
+                    done && "bg-pitch-400 text-ink-950",
+                    active && "text-pitch-300",
+                    !done && !active && "ring-1 ring-white/10",
+                  )}
+                >
+                  {done ? <Check /> : active ? <Spinner className="size-4" /> : null}
+                </span>
+                <span className={cn(done ? "text-zinc-300" : active ? "font-medium text-white" : "text-zinc-500")}>{label}</span>
+                {active && message ? <span className="ml-auto hidden truncate text-[12px] text-zinc-500 sm:block">{message}</span> : null}
+              </li>
+            );
+          })}
+        </ol>
+      </Card>
+      <p className="mt-4 text-center text-[12px] text-zinc-500">
+        Progress moves in steps as each stage finishes. A short window takes minutes; a full match takes much longer.
+      </p>
+    </PageShell>
   );
 }

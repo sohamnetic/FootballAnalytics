@@ -6,6 +6,8 @@ export interface MatchInfo {
   duration_s: number | null;
   fps: number;
   clip_duration_used_s?: number;
+  /** Display colours of each team's kit, as drawn in the analysis video. */
+  kit_colors?: { team_a?: string; team_b?: string } | null;
   team_a_name?: string;
   team_b_name?: string;
   camera?: string;
@@ -15,9 +17,10 @@ export interface MatchInfo {
 export interface TeamStats {
   possession_percentage: number | null;
   possession_seconds?: number | null;
-  goals: number;
-  shots: number;
-  shots_on_target: number;
+  // null when shots/goals could not be measured (moving camera)
+  goals: number | null;
+  shots: number | null;
+  shots_on_target: number | null;
   completed_passes: number;
   pass_accuracy: number | null;
   interceptions: number;
@@ -27,9 +30,9 @@ export interface TeamStats {
 export interface PlayerStats {
   stable_id: number;
   team_id: TeamId | string;
-  goals: number;
-  shots: number;
-  shots_on_target: number;
+  goals: number | null;
+  shots: number | null;
+  shots_on_target: number | null;
   shot_accuracy: number | null;
   shot_conversion_rate: number | null;
   successful_passes: number;
@@ -45,9 +48,9 @@ export interface EventSummary {
   completed_passes: number;
   interceptions: number;
   recoveries: number;
-  shots: number;
-  shots_on_target: number;
-  goals: number;
+  shots: number | null;
+  shots_on_target: number | null;
+  goals: number | null;
 }
 
 export interface DataQuality {
@@ -59,6 +62,7 @@ export interface DataQuality {
   identity_fragmentation: boolean;
   team_assignment_uncertainty: boolean;
   goal_geometry_manual: boolean;
+  shots_goals_measured?: boolean;
   pass_attempts_available: boolean;
   possession_confirmed_seconds?: number;
   possession_unknown_or_unassigned_seconds?: number;
