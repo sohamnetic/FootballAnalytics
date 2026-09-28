@@ -156,8 +156,8 @@ def _startup():
             log.warning("Marked %d interrupted analysis job(s) as failed", stuck)
     jobs.start_background()
     storage = get_storage()
-    if hasattr(storage, "ensure_cors") and settings.ALLOWED_ORIGINS:
-        if not storage.ensure_cors(settings.ALLOWED_ORIGINS):
+    if hasattr(storage, "ensure_cors") and settings.BUCKET_ORIGINS:
+        if not storage.ensure_cors(settings.BUCKET_ORIGINS):
             log.warning("Couldn't set CORS on the bucket; see docs/DEPLOY.md")
     log.info("API ready. storage=%s runner=%s", settings.STORAGE, settings.RUNNER)
 

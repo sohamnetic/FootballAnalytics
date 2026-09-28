@@ -33,8 +33,12 @@ ALLOWED_ORIGINS = _list(
     "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174",
 )
 
-# e.g. https://tactivision-.*\.vercel\.app to allow Vercel preview links too
-ALLOWED_ORIGIN_REGEX = _env("FA_ALLOWED_ORIGIN_REGEX")
+# any Vercel site by default, so the site works without copying its address
+# here. Safe enough: logins are bearer tokens, not cookies, so another site
+# can't act as a signed-in user. Set it to "" to allow only the list above.
+ALLOWED_ORIGIN_REGEX = os.environ.get("FA_ALLOWED_ORIGIN_REGEX", r"https://[a-z0-9-]+\.vercel\.app").strip()
+# the same for the bucket's CORS rules (S3 allows one * per origin)
+BUCKET_ORIGINS = ALLOWED_ORIGINS + (["https://*.vercel.app"] if ALLOWED_ORIGIN_REGEX else [])
 
 # browser uploads go in parts of this size (S3 needs 5 MB+ and at most 10,000 parts)
 UPLOAD_PART_BYTES = max(5, int(_env("FA_UPLOAD_PART_MB", "64"))) * 1024 * 1024
