@@ -4,6 +4,7 @@ Convert the time settings from config.py (seconds) into frames for a video.
 Originally these were frame counts tuned on 60 fps video, which broke on
 30 fps uploads.
 """
+import math
 from dataclasses import dataclass
 
 from config.config import (
@@ -26,6 +27,12 @@ def frames_for(seconds, fps):
     return max(1, int(seconds * fps + 0.5))
 
 
+def frames_at_least(seconds, fps):
+    """For minimum durations: round up, so a lower frame rate never makes
+    the rule easier to pass (0.08 s = 5 frames at 60 fps, 3 at 30 fps)."""
+    return max(1, math.ceil(seconds * fps - 1e-6))
+
+
 @dataclass(frozen=True)
 class EventTiming:
     fps: float
@@ -39,7 +46,7 @@ class EventTiming:
 
     @property
     def possession_confirm(self):
-        return self.f(POSSESSION_CONFIRM_S)
+        return frames_at_least(POSSESSION_CONFIRM_S, self.fps)
 
     @property
     def possession_merge_gap(self):
@@ -51,7 +58,7 @@ class EventTiming:
 
     @property
     def pass_min_possession(self):
-        return self.f(PASS_MIN_POSSESSION_S)
+        return frames_at_least(PASS_MIN_POSSESSION_S, self.fps)
 
     @property
     def interception_max_transition(self):
@@ -63,7 +70,7 @@ class EventTiming:
 
     @property
     def shot_min_possession(self):
-        return self.f(SHOT_MIN_POSSESSION_S)
+        return frames_at_least(SHOT_MIN_POSSESSION_S, self.fps)
 
     @property
     def shot_window(self):

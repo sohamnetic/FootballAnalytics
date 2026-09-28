@@ -13,12 +13,12 @@ import numpy as np
 from config.config import (
     IDENTITY_KIT_MIN_SAT,
     IDENTITY_OCR_ENABLED,
-    IDENTITY_OCR_EVERY,
+    IDENTITY_OCR_EVERY_S,
     IDENTITY_OCR_MAX_PER_TRACK,
     IDENTITY_OCR_MIN_CONF,
     IDENTITY_OCR_MIN_HEIGHT_PX,
     IDENTITY_PLAYER_TURF_MIN_STRONG_KIT,
-    IDENTITY_REID_EVERY,
+    IDENTITY_REID_EVERY_S,
     IDENTITY_REID_WEIGHTS,
     DEVICE,
 )
@@ -34,7 +34,7 @@ _DIGITS = re.compile(r"^\d{1,2}$")
 
 class TrackletFeatureCollector:
 
-    def __init__(self):
+    def __init__(self, fps):
         from boxmot.reid.core.runtime import ReID
 
         device = f"cuda:{DEVICE}" if isinstance(DEVICE, int) else DEVICE
@@ -45,6 +45,8 @@ class TrackletFeatureCollector:
 
             self._ocr = easyocr.Reader(["en"], gpu=isinstance(DEVICE, int), verbose=False)
 
+        self._reid_every = max(1, round(IDENTITY_REID_EVERY_S * fps))
+        self._ocr_every = max(1, round(IDENTITY_OCR_EVERY_S * fps))
         self._ocr_eligible = defaultdict(int)
         self._ocr_count = defaultdict(int)
         self._ocr_votes = defaultdict(lambda: defaultdict(float))
@@ -88,7 +90,7 @@ class TrackletFeatureCollector:
             self.kit_sat.append(sat)
 
             height = y2 - y1
-            if frame_number % IDENTITY_REID_EVERY == 0 and height >= 40:
+            if frame_number % self._reid_every == 0 and height >= 40:
                 reid_rows.append((tid, clean[i] and height >= _CLEAN_MIN_HEIGHT_PX))
                 reid_boxes.append((x1, y1, x2, y2))
 
@@ -101,7 +103,7 @@ class TrackletFeatureCollector:
             ):
                 k = self._ocr_eligible[tid]
                 self._ocr_eligible[tid] = k + 1
-                if k % IDENTITY_OCR_EVERY == 0 and self._ocr_count[tid] < IDENTITY_OCR_MAX_PER_TRACK:
+                if k % self._ocr_every == 0 and self._ocr_count[tid] < IDENTITY_OCR_MAX_PER_TRACK:
                     self._ocr_count[tid] += 1
                     self._read_number(frame, tid, frame_number, x1, y1, x2, y2)
 

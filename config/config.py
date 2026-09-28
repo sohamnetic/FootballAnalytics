@@ -99,16 +99,16 @@ IDENTITY_REMATCH_AUDIT = True
 # ReID, shirt numbers and movement. Also drops people who aren't players.
 IDENTITY_RESOLVER_ENABLED = True
 IDENTITY_REID_WEIGHTS = MODELS_DIR / "lmbn_n_duke.pt"
-IDENTITY_REID_EVERY = 10                # run ReID every 10th frame
+IDENTITY_REID_EVERY_S = 0.167          # ReID once every this many seconds (10 frames at 60 fps)
 IDENTITY_OCR_ENABLED = True
-IDENTITY_OCR_EVERY = 8                  # OCR every 8th usable crop of a track
+IDENTITY_OCR_EVERY_S = 0.133           # OCR a track's crop once every this many seconds
 IDENTITY_OCR_MAX_PER_TRACK = 400        # just a safety limit, it stops earlier once the number is clear
 IDENTITY_OCR_MIN_HEIGHT_PX = 90         # smaller than this and the number is unreadable
 IDENTITY_OCR_MIN_CONF = 0.35
 # turf colour in OpenCV HSV. min V is 80 because the bench mat is the same green but darker
 IDENTITY_TURF_HSV_MIN = (35, 60, 80)
 IDENTITY_TURF_HSV_MAX = (56, 255, 255)
-IDENTITY_MIN_TRACKLET_DETECTIONS = 10
+IDENTITY_MIN_TRACKLET_S = 0.167        # shorter fragments are dropped
 # who counts as a player: on the turf with a coloured kit, or near the
 # boards with a very bright kit (ref / keepers)
 IDENTITY_PLAYER_TURF_MIN = 0.55
@@ -168,6 +168,9 @@ GOAL_FREE_BALL_MARGIN = 0.25    # no player right next to the ball in the net
 GOAL_MIN_INSIDE_S = 0.3
 GOAL_VANISH_S = 1.0             # ball disappears in the net for this long
 
+# videos above this frame rate are converted down to it before analysis
+ANALYSIS_FPS = int(os.environ.get("FA_ANALYSIS_FPS", "30"))  # 0 = never convert
+
 # Analysis video shown on the dashboard, needs ffmpeg
 FFMPEG_BIN = os.environ.get("FA_FFMPEG", "").strip() or None
 ANALYSIS_VIDEO_WIDTH = 1280
@@ -180,7 +183,13 @@ WRITE_DEBUG_VIDEOS = os.environ.get("FA_DEBUG_VIDEOS", "").strip() == "1"
 # TRACKER
 # ======================================================
 
-TRACKER_CONFIG = PROJECT_ROOT / "config" / "bytetrack.yaml"
+TRACKER_CONFIG = Path(os.environ.get("FA_TRACKER_CONFIG", "").strip() or PROJECT_ROOT / "config" / "bytetrack.yaml")
+# how long the tracker remembers a lost player (track_buffer in the yaml is
+# replaced with this converted to frames)
+TRACK_BUFFER_S = 1.5
+# at 30 fps players move twice as far between frames, so the tracker needs a
+# looser box match (checked against the 40s identity clip)
+TRACK_MATCH_THRESH_30FPS = 0.9
 
 # ======================================================
 # DEVICE (CUDA if available, otherwise CPU)

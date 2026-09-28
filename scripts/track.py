@@ -5,6 +5,7 @@ import os
 import time
 
 import cv2
+import numpy as np
 import pandas as pd
 
 from config.config import (
@@ -14,6 +15,8 @@ from config.config import (
     PERSON_CONFIDENCE,
     TEST_VIDEO,
     TRACKER_CONFIG,
+    TRACK_BUFFER_S,
+    TRACK_MATCH_THRESH_30FPS,
     TRACKING_OUTPUT,
     PROJECT_ROOT,
     DEVICE,
@@ -36,6 +39,14 @@ from scripts.vision.camera_motion import CameraMotion, summarize_motion
 from scripts.vision.goals import GoalDetector, goal_model_available, goals_path, smooth_goals, write_goals
 
 
+def _iou(a, b):
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
 def camera_summary_path(coordinate_output):
     """Path of the camera movement summary for a coordinates CSV."""
     coordinate_output = Path(coordinate_output)
@@ -47,7 +58,14 @@ def _apply_identity_resolution(collector, coordinate_output, fps, report_path):
     from scripts.identity.resolver import resolve_identities
 
     t0 = time.time()
-    resolution = resolve_identities(collector.as_arrays(), fps)
+    features = collector.as_arrays()
+    if os.environ.get("FA_SAVE_IDENTITY_FEATURES") == "1":
+        # for tuning the resolver without re-running tracking
+        import pickle
+
+        with open(Path(report_path).with_suffix(".features.pkl"), "wb") as f:
+            pickle.dump({"features": features, "fps": fps}, f)
+    resolution = resolve_identities(features, fps)
     report = resolution.report()
 
     df = pd.read_csv(coordinate_output)
@@ -176,7 +194,7 @@ def run_tracking(
     if IDENTITY_RESOLVER_ENABLED:
         from scripts.identity.tracklet_features import TrackletFeatureCollector
 
-        collector = TrackletFeatureCollector()
+        collector = TrackletFeatureCollector(fps)
         print("Identity evidence      : ReID + jersey OCR + camera motion (offline resolution)")
 
     logger = CoordinateLogger(coordinate_output)
@@ -200,6 +218,9 @@ def run_tracking(
             f"({total_frames / fps:.1f}s). Use a longer source video "
             f"(e.g. videos/raw/match.mp4) or a smaller --start-time."
         )
+
+    end_0 = min(end_frame_0, total_frames) if end_frame_0 is not None else total_frames
+    print(f"Frames to process      : {end_0 - start_frame_0}")
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame_0)
     actual_pos = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
@@ -228,6 +249,29 @@ def run_tracking(
     last_csv_frame = None
     current_0 = actual_pos
 
+    # same tracker memory in seconds whatever the frame rate
+    import yaml
+    tracker_cfg = yaml.safe_load(Path(TRACKER_CONFIG).read_text())
+    tracker_cfg["track_buffer"] = max(1, round(TRACK_BUFFER_S * fps))
+    if fps < 45:
+        tracker_cfg["match_thresh"] = TRACK_MATCH_THRESH_30FPS
+    tracker_config = track_dir / "bytetrack.yaml"
+    tracker_config.write_text(yaml.safe_dump(tracker_cfg))
+
+    # The tracker only shows a new player from their second frame. Keep the
+    # raw detections so that first frame can be added back after the loop.
+    raw = {"boxes": np.zeros((0, 5))}
+
+    def _keep_raw(predictor):
+        b = predictor.results[0].boxes
+        raw["boxes"] = (np.column_stack([b.xyxy.cpu().numpy(), b.conf.cpu().numpy()])
+                        if b is not None and len(b) else np.zeros((0, 5)))
+
+    model.add_callback("on_predict_postprocess_end", _keep_raw)  # runs before the tracker's
+    seen_tracks = set()
+    prev_frame = None
+    first_frames = []
+
     camera = CameraMotion()
     camera_transforms = {}
     ball_candidates = []
@@ -246,7 +290,7 @@ def run_tracking(
 
         results = model.track(
             source=frame,
-            tracker=str(TRACKER_CONFIG),
+            tracker=str(tracker_config),
             persist=True,
             save=False,
             device=DEVICE,
@@ -281,6 +325,20 @@ def run_tracking(
             ],
             frame=frame,
         )
+
+        # new track: find the same player in last frame's raw detections
+        if prev_frame is not None:
+            pf, praw, pout = prev_frame
+            for b in person_boxes:
+                if b["track_id"] in seen_tracks:
+                    continue
+                box = np.array(b["bbox"], float)
+                free = [r for r in praw if _iou(r[:4], box) >= 0.3 and all(_iou(r[:4], o) < 0.5 for o in pout)]
+                if free:
+                    best = max(free, key=lambda r: _iou(r[:4], box))
+                    first_frames.append((pf, b["track_id"], stable_ids[b["track_id"]], best))
+        seen_tracks.update(b["track_id"] for b in person_boxes)
+        prev_frame = (original_frame, raw["boxes"].copy(), [np.array(b["bbox"], float) for b in person_boxes])
 
         camera_transforms[original_frame] = camera.update(frame, [b["bbox"] for b in person_boxes])
         if collector is not None:
@@ -349,6 +407,19 @@ def run_tracking(
     cap.release()
     if writer is not None:
         writer.release()
+
+    for f, track_id, stable_id, (x1, y1, x2, y2, conf) in first_frames:
+        logger.log(
+            frame_number=f,
+            track_id=track_id,
+            stable_id=stable_id,
+            cls_name="person",
+            confidence=round(float(conf), 4),
+            x1=int(x1),
+            y1=int(y1),
+            x2=int(x2),
+            y2=int(y2),
+        )
 
     chosen, ball_stats = select_balls(ball_candidates, camera_transforms, fps)
     for f in sorted(chosen):

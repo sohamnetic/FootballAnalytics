@@ -21,6 +21,7 @@ from config.config import (
     IDENTITY_OUTPUT,
     OUTPUT_DIR,
     TEAM_OUTPUT,
+    ANALYSIS_FPS,
     TEST_VIDEO,
     WRITE_DEBUG_VIDEOS,
 )
@@ -34,6 +35,7 @@ from scripts.analytics.heatmap import HeatmapEngine
 from scripts.analytics.motion_engine import MotionEngine
 from scripts.track import camera_summary_path, run_tracking
 from scripts.analytics.analysis_video import render_analysis_video
+from scripts.pipeline.prepare_video import prepare_video
 from scripts.vision.goals import goals_path
 from scripts.vision.team_assigner import bgr_hex, team_kit_colors
 from scripts.vision.team_assigner import run_team_assignment
@@ -263,21 +265,36 @@ def run_mvp(
     csv_path = Path(csv_path)
     video_path = Path(video_path)
     paths = segment_output_paths(start_time, duration)
+    source_file = csv_path.with_name(f"{csv_path.stem}_source.json")
 
     if force_track or not csv_path.exists():
+        # 60 fps videos get converted to 30 fps first (only the part we analyse)
+        suffix = paths.get("passes_suffix", "")
+        prepared = OUTPUT_DIR / "video" / f"analysis_{ANALYSIS_FPS}fps{'_' + suffix if suffix else ''}.mp4"
+        analysis_video_path, track_start, track_duration = prepare_video(video_path, prepared, start_time, duration)
         print(f"Running tracking → {csv_path}")
         csv_path = Path(
             run_tracking(
-                video_path=video_path,
+                video_path=analysis_video_path,
                 coordinate_output=csv_path,
                 max_frames=max_frames,
-                start_time=start_time,
-                duration=duration,
+                start_time=track_start,
+                duration=track_duration,
                 tracking_name=paths["tracking_name"],
             )
         )
+        source_file.write_text(json.dumps({"video": str(analysis_video_path)}), encoding="utf-8")
+        video_path = analysis_video_path
     else:
         print(f"Reusing existing coordinate CSV: {csv_path}")
+        # use the same video the CSV was made from
+        if source_file.exists():
+            made_from = Path(json.loads(source_file.read_text(encoding="utf-8"))["video"])
+            if made_from != video_path:
+                if made_from.exists():
+                    video_path = made_from
+                else:
+                    video_path, _, _ = prepare_video(video_path, made_from, start_time, duration)
 
     if not csv_path.exists():
         raise FileNotFoundError(f"Coordinate CSV was not created: {csv_path}")

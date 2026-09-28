@@ -26,7 +26,7 @@ from config.config import (
     IDENTITY_FORCED_MERGE_COST,
     IDENTITY_KIT_MIN_SAT,
     IDENTITY_MERGE_COST,
-    IDENTITY_MIN_TRACKLET_DETECTIONS,
+    IDENTITY_MIN_TRACKLET_S,
     IDENTITY_OCR_MIN_CONF,
     IDENTITY_PLAYER_TURF_MIN,
     IDENTITY_PLAYER_TURF_MIN_STRONG_KIT,
@@ -35,7 +35,7 @@ from config.config import (
 )
 
 _OVERLAP_IOU_SAME_BOX = 0.5
-_MAX_CONFLICT_FRAMES = 2
+_MAX_CONFLICT_S = 0.033   # on screen together longer than this = two different people
 _MOTION_WEIGHT = 0.35
 _OCR_BONUS = {2: 0.30, 1: 0.10}
 
@@ -151,7 +151,7 @@ def _number_relation(nums_a, nums_b):
     return rel
 
 
-def _build_tracklets(features):
+def _build_tracklets(features, fps):
     rows = features["rows"]
     feet = np.stack([(rows[:, 3] + rows[:, 5]) / 2, rows[:, 6], np.ones(len(rows))], axis=1)
     cams = features["camera"]
@@ -184,11 +184,11 @@ def _build_tracklets(features):
 
         pos = stab[idx]
         t.p_start, t.p_end = pos[0], pos[-1]
-        tail = idx[-min(15, len(idx)):]
+        tail = idx[-min(max(2, round(0.25 * fps)), len(idx)):]
         span = max(rows[tail[-1], 0] - rows[tail[0], 0], 1)
         t.v_end = (stab[tail[-1]] - stab[tail[0]]) / span
 
-        if t.n < IDENTITY_MIN_TRACKLET_DETECTIONS:
+        if t.n < max(1, round(IDENTITY_MIN_TRACKLET_S * fps)):
             t.drop_reason = "too_short"
         elif not (
             (t.turf >= IDENTITY_PLAYER_TURF_MIN and t.sat >= IDENTITY_KIT_MIN_SAT)
@@ -233,7 +233,8 @@ def _headcount(players, rows, fps):
 
 def resolve_identities(features, fps):
     rows = features["rows"]
-    tracklets = _build_tracklets(features)
+    tracklets = _build_tracklets(features, fps)
+    max_conflict_frames = max(1, round(_MAX_CONFLICT_S * fps))
     players = sorted((t for t in tracklets.values() if t.is_player), key=lambda t: t.start)
     n = len(players)
     if n == 0:
@@ -246,7 +247,7 @@ def resolve_identities(features, fps):
     conflict = np.zeros((n, n), bool)
     for i in range(n):
         for j in range(i + 1, n):
-            c = players[i].kit != players[j].kit or _real_overlap_frames(rows, players[i], players[j]) > _MAX_CONFLICT_FRAMES
+            c = players[i].kit != players[j].kit or _real_overlap_frames(rows, players[i], players[j]) > max_conflict_frames
             conflict[i, j] = conflict[j, i] = c
     np.fill_diagonal(conflict, True)
 
