@@ -6,7 +6,8 @@ import torch
 # PROJECT ROOT
 # ======================================================
 
-PROJECT_ROOT = Path(r"D:\FootballAnalytics")
+# wherever the repo is checked out (this laptop, Kaggle's /tmp/fa, ...)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # set FA_OUTPUT_DIR to write a job's outputs somewhere else (the web app does this)
 

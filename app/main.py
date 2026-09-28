@@ -18,12 +18,12 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from app import jobs, settings
 from app.auth import authenticate, create_user, issue_token, parse_token
-from app.storage import LocalStorage, get_storage
+from app.storage import LocalStorage, StorageUnavailable, get_storage
 from app.store import (
     ANALYSIS_VIDEO_FILE,
     STATS_FILE,
@@ -77,6 +77,7 @@ class AuthBody(BaseModel):
 class UploadStart(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     size: int = Field(gt=0)
+    duration_s: float | None = Field(default=None, ge=0)  # as the browser read it
 
 
 class UploadPart(BaseModel):
@@ -147,13 +148,29 @@ def _has_source_video(row: dict) -> bool:
     return bool(row.get("video_key")) and not row.get("source_deleted") and row.get("status") != "uploading"
 
 
+STORAGE_DOWN = ("Storage can't be read right now. On the free plan this usually means today's "
+                "download limit is used up; it resets at midnight GMT (5:30 AM in India).")
+
+
+@app.exception_handler(StorageUnavailable)
+def _storage_down(request: Request, exc: StorageUnavailable):
+    log.warning("Storage read refused: %s", exc)
+    return JSONResponse(status_code=503, content={"detail": STORAGE_DOWN})
+
+
 @app.on_event("startup")
 def _startup():
-    ensure_loaded()
-    if settings.RUNNER == "local":
-        stuck = fail_interrupted_jobs()
-        if stuck:
-            log.warning("Marked %d interrupted analysis job(s) as failed", stuck)
+    # start even if storage refuses reads for now; requests get a clear 503
+    # until it works again, and the data loads on the first request after
+    try:
+        ensure_loaded()
+    except StorageUnavailable as exc:
+        log.warning("Storage not readable at startup, will retry: %s", exc)
+    else:
+        if settings.RUNNER == "local":
+            stuck = fail_interrupted_jobs()
+            if stuck:
+                log.warning("Marked %d interrupted analysis job(s) as failed", stuck)
     jobs.start_background()
     storage = get_storage()
     if hasattr(storage, "ensure_cors") and settings.BUCKET_ORIGINS:
@@ -221,6 +238,7 @@ def start_upload(body: UploadStart, user: dict = Depends(current_user)):
         "stored_name": Path(key).name,
         "video_key": key,
         "bytes": body.size,
+        "video_duration_s": body.duration_s,
         "status": "uploading",
         "progress": 0,
         "stage": "uploading",
@@ -319,6 +337,15 @@ def analyze(match_id: str, body: AnalyzeBody, user: dict = Depends(current_user)
             raise HTTPException(status_code=400, detail="Window analysis needs duration_s")
     elif analysis != "full":
         raise HTTPException(status_code=400, detail="analysis must be full or window")
+
+    budget = settings.DAILY_DOWNLOAD_BUDGET
+    planned = {**row, "analysis": analysis, "duration_s": duration}
+    if budget and jobs.estimate_download(planned) > budget:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"This video is too big for the free daily download limit "
+                    f"({budget / 1024**2:.0f} MB). Analyse a custom window instead."),
+        )
 
     upsert_match({
         "match_id": match_id,

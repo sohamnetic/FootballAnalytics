@@ -29,6 +29,10 @@ from app import settings
 LINK_TTL_S = 6 * 3600
 
 
+class StorageUnavailable(Exception):
+    """The bucket refused a read (bad key, or the free daily download cap)."""
+
+
 def _sign(*parts) -> str:
     text = "|".join(str(p) for p in parts)
     return hmac.new(settings.secret().encode(), text.encode(), hashlib.sha256).hexdigest()
@@ -201,7 +205,8 @@ class S3Storage:
         except ClientError as exc:
             if self._missing(exc):
                 return None
-            raise
+            # e.g. B2's daily download cap: callers must not treat this as empty
+            raise StorageUnavailable(str(exc)) from exc
         return json.loads(body)
 
     def write_json(self, key: str, data) -> None:

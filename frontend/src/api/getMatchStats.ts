@@ -63,10 +63,18 @@ function putPart(url: string, blob: Blob, onBytes: (sent: number) => void): Prom
 
 // The video goes to storage in parts (a few in parallel, each retried), so a
 // dropped connection only costs one part and the API never handles the bytes.
-export async function uploadMatchVideo(file: File, onProgress?: (fraction: number) => void): Promise<UploadResult> {
+export async function uploadMatchVideo(
+  file: File,
+  onProgress?: (fraction: number) => void,
+  durationS?: number | null,
+): Promise<UploadResult> {
   const start = await apiFetch("/api/matches/uploads", {
     method: "POST",
-    body: JSON.stringify({ filename: file.name, size: file.size }),
+    body: JSON.stringify({
+      filename: file.name,
+      size: file.size,
+      duration_s: durationS && Number.isFinite(durationS) ? durationS : null,
+    }),
   });
   if (!start.ok) throw new Error(await readError(start, "Could not start the upload"));
   const plan = (await start.json()) as UploadPlan;

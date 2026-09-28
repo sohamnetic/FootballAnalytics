@@ -62,7 +62,7 @@ export function UploadPage() {
     setError(null);
     setProgress(0);
     try {
-      const result = await uploadMatchVideo(file, setProgress);
+      const result = await uploadMatchVideo(file, setProgress, duration);
       toast.success("Upload complete", { description: "Now tell us who's playing." });
       navigate(`/matches/${result.match_id}/setup`);
     } catch (err) {

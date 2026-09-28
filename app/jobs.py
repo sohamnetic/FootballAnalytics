@@ -247,8 +247,43 @@ def _queued() -> list[dict]:
     return sorted(rows, key=lambda r: r.get("queued_at") or 0)
 
 
+# ------------------------------------------------------- daily download budget
+
+BUDGET_MESSAGE = ("Waiting for tomorrow's free download allowance. "
+                  "It resets at midnight GMT (5:30 AM in India) and the analysis starts then.")
+
+
+def _today() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def downloads_today() -> int:
+    state = worker_status()
+    return int(state.get("dl_bytes") or 0) if state.get("dl_day") == _today() else 0
+
+
+def estimate_download(row: dict) -> int:
+    """Bytes the worker will pull from storage for this job. A window is cut
+    out with range requests, so it costs its share of the file."""
+    size = int(row.get("bytes") or 0)
+    window = float(row.get("duration_s") or 0) if row.get("analysis") == "window" else 0
+    total = float(row.get("video_duration_s") or 0)
+    if window > 0 and total > 0:
+        return min(size, int(size * window / total * 1.2) + 5 * 1024**2)
+    return size
+
+
+def fits_budget(row: dict) -> bool:
+    budget = settings.DAILY_DOWNLOAD_BUDGET
+    return not budget or downloads_today() + estimate_download(row) <= budget
+
+
+def _charge(nbytes: int) -> None:
+    _save_state(dl_day=_today(), dl_bytes=downloads_today() + nbytes)
+
+
 def claim(worker_id: str) -> dict | None:
-    """Give the worker the oldest queued job."""
+    """Give the worker the oldest queued job that fits today's download budget."""
     worker_seen(worker_id)
     for row in _queued():
         match_id = row["match_id"]
@@ -256,6 +291,10 @@ def claim(worker_id: str) -> dict | None:
         if not video_key or not get_storage().size(video_key):
             fail(match_id, "Uploaded video is missing.")
             continue
+        if not fits_budget(row):
+            upsert_match({"match_id": match_id, "message": BUDGET_MESSAGE})
+            continue
+        _charge(estimate_download(row))
         upsert_match({
             "match_id": match_id,
             "status": "processing",
@@ -357,6 +396,14 @@ def kick() -> None:
 
 def _kick() -> None:
     waiting = _queued()
+    if not waiting:
+        return
+    # don't start a GPU for jobs that must wait for tomorrow's downloads
+    over = [r for r in waiting if not fits_budget(r)]
+    for row in over:
+        if row.get("message") != BUDGET_MESSAGE:
+            upsert_match({"match_id": row["match_id"], "message": BUDGET_MESSAGE})
+    waiting = [r for r in waiting if fits_budget(r)]
     if not waiting:
         return
     state = worker_status()

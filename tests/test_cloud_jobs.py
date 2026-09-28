@@ -104,6 +104,25 @@ class CloudJobsTest(unittest.TestCase):
         self.assertTrue(jobs.heartbeat("m1", "w1", "Tracking players", 30))
         self.assertEqual(store.get_match("m1")["progress"], 30)
 
+    def test_download_budget_holds_big_jobs_and_lets_windows_through(self):
+        mb = 1024**2
+        with mock.patch.object(settings, "DAILY_DOWNLOAD_BUDGET", 800 * mb):
+            self.add_match("full")
+            store.upsert_match({"match_id": "full", "bytes": 700 * mb})
+            self.add_match("window")
+            store.upsert_match({"match_id": "window", "bytes": 700 * mb, "analysis": "window",
+                                "duration_s": 60, "video_duration_s": 1800})
+            self.assertEqual(jobs.claim("w1")["match_id"], "full")
+            # 700 MB used today: the full match is done, a 60 s window (~33 MB) still fits
+            self.assertEqual(jobs.claim("w1")["match_id"], "window")
+            self.add_match("again")
+            store.upsert_match({"match_id": "again", "bytes": 700 * mb})
+            self.assertIsNone(jobs.claim("w1"))
+            self.assertEqual(store.get_match("again")["message"], jobs.BUDGET_MESSAGE)
+            jobs.worker_exit("w1")
+            jobs.kick()
+            self.assertEqual(self.launches, [])
+
     def test_notebook_script_has_config(self):
         from app import kaggle_launcher
 

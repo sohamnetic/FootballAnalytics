@@ -72,6 +72,11 @@ PUBLIC_API_URL = _env("FA_PUBLIC_API_URL") or _env("RENDER_EXTERNAL_URL")
 WORKER_STALE_S = int(_env("FA_WORKER_STALE_S", "900"))
 JOB_MAX_ATTEMPTS = int(_env("FA_JOB_MAX_ATTEMPTS", "2"))
 
+# Backblaze's free plan allows 1 GB of downloads a day and blocks everything
+# (even logins) past that, so analyses may only use this much per GMT day.
+# The rest is left for the site and for watching videos. 0 = no limit.
+DAILY_DOWNLOAD_BUDGET = int(float(_env("FA_DAILY_DOWNLOAD_MB", "800" if STORAGE == "s3" else "0")) * 1024**2)
+
 KAGGLE_USERNAME = _env("KAGGLE_USERNAME")
 KAGGLE_KERNEL = _env("FA_KAGGLE_KERNEL", "fa-analysis-worker")
 # how long a freshly started notebook gets to check in before we start another
