@@ -347,6 +347,7 @@ def status(match_id: str, user: dict = Depends(current_user)):
         "filename": row.get("filename"),
         "team_a": row.get("team_a"),
         "team_b": row.get("team_b"),
+        "log_tail": row.get("log_tail") if row.get("status") == "failed" else None,
     }
 
 
@@ -464,6 +465,7 @@ class CompleteBody(WorkerBody):
 class FailBody(WorkerBody):
     message: str = Field(default="We couldn't complete analysis for this match.", max_length=300)
     retry: bool = False
+    log_tail: str = Field(default="", max_length=10000)
 
 
 class ExitBody(WorkerBody):
@@ -514,6 +516,8 @@ def worker_complete(match_id: str, body: CompleteBody):
 @app.post("/api/worker/jobs/{match_id}/fail", dependencies=[Depends(worker_auth)])
 def worker_fail(match_id: str, body: FailBody):
     row = _worker_job(match_id, body.worker_id)
+    # the last lines of output, so the failure screen can say what went wrong
+    upsert_match({"match_id": match_id, "log_tail": body.log_tail or None}, persist=False)
     if body.retry:
         jobs.requeue_or_fail(row, "worker reported a crash")
     else:

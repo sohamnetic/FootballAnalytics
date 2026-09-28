@@ -79,6 +79,7 @@ def enqueue(match_id: str) -> None:
         "stage": "queued",
         "message": "Waiting to start analysis...",
         "error": None,
+        "log_tail": None,
         "attempts": 0,
         "queued_at": _now(),
     })
@@ -195,6 +196,8 @@ def _run_local(match_id: str) -> None:
     )
     storage.put_file(result_key(match_id, LOG_FILE), result.log_path, "text/plain")
     if not result.ok:
+        lines = result.log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-60:]
+        upsert_match({"match_id": match_id, "log_tail": "\n".join(lines)[-8000:]}, persist=False)
         fail(match_id, "We couldn't complete analysis for this match.")
         return
     storage.put_file(result_key(match_id, STATS_FILE), result.stats_path, "application/json")

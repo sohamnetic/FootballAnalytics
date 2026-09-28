@@ -149,6 +149,7 @@ export async function getMatchStatus(matchId: string) {
     stage: string;
     message: string;
     progress_kind?: string;
+    log_tail?: string | null;
   }>;
 }
 

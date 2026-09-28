@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import uuid
 from pathlib import Path
 
@@ -105,10 +106,24 @@ def has_gpu() -> bool:
     return False
 
 
+class JobError(Exception):
+    """A failure with a message for the user; retrying won't help."""
+
+
+CAP_MESSAGE = ("Today's free storage download limit is used up. "
+               "It resets at midnight GMT (5:30 AM in India); start the analysis again after that.")
+
+
+def _check_response(r: requests.Response) -> None:
+    if r.status_code == 403 and "cap" in r.text.lower():
+        raise JobError(CAP_MESSAGE)
+    r.raise_for_status()
+
+
 def download(url: str, dest: Path, beat) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with requests.get(absolute(url), stream=True, timeout=120) as r:
-        r.raise_for_status()
+        _check_response(r)
         total = int(r.headers.get("Content-Length") or 0)
         done, last = 0, time.time()
         with dest.open("wb") as f:
@@ -120,7 +135,36 @@ def download(url: str, dest: Path, beat) -> None:
                     beat()
                     if total:
                         say(f"downloaded {done / total:.0%}")
+    if total and done != total:
+        raise RuntimeError(f"download stopped at {done} of {total} bytes")
     say(f"downloaded {done / 1e6:.0f} MB")
+
+
+def fetch_window(url: str, dest: Path, start: float, duration: float) -> bool:
+    """Cut just the analysed window out of the stored video. ffmpeg reads
+    it with range requests, so only that part is downloaded (free storage
+    allows 1 GB of downloads a day). False if ffmpeg couldn't do it."""
+    ffmpeg = os.environ.get("FA_FFMPEG") or shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [ffmpeg, "-v", "error", "-y", "-ss", f"{start:.3f}", "-i", absolute(url), "-t", f"{duration:.3f}",
+           "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", str(dest)]
+    run = subprocess.run(cmd, capture_output=True, text=True)
+    if "cap" in run.stderr.lower() and "403" in run.stderr:
+        raise JobError(CAP_MESSAGE)
+    if run.returncode != 0 or not dest.exists() or dest.stat().st_size == 0:
+        say(f"couldn't cut the window ({run.stderr.strip()[-300:]}), downloading the whole video")
+        dest.unlink(missing_ok=True)
+        return False
+    say(f"downloaded the {duration:.0f}s window only ({dest.stat().st_size / 1e6:.0f} MB)")
+    return True
+
+
+def log_tail(path: Path | None, lines: int = 60) -> str:
+    if not path or not path.exists():
+        return ""
+    return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])[-8000:]
 
 
 def upload(match_id: str, kind: str, path: Path, content_type: str) -> None:
@@ -167,16 +211,26 @@ def run_job(job: dict) -> None:
     say(f"match {match_id}")
     try:
         with Heartbeat(match_id) as beat:
-            video = work / job["video_name"]
-            download(job["video_url"], video, beat.send)
+            settings = dict(job["job"])
+            start = float(settings.get("start_time_s") or 0)
+            duration = float(settings.get("duration_s") or 0)
+            window = work / "window.mp4"
+            if settings.get("analysis") == "window" and duration > 0 \
+                    and fetch_window(job["video_url"], window, start, duration):
+                video = window
+                settings["start_time_s"] = 0  # the cut starts at the window
+            else:
+                video = work / job["video_name"]
+                download(job["video_url"], video, beat.send)
             result = run_pipeline(
-                video, work / "out", {**job["job"], "match_id": match_id},
+                video, work / "out", {**settings, "match_id": match_id},
                 report=beat.send, log=print,
             )
             upload(match_id, "log", result.log_path, "text/plain")
             if not result.ok:
                 call(f"/api/worker/jobs/{match_id}/fail",
-                     {"message": "We couldn't complete analysis for this match."})
+                     {"message": "We couldn't complete analysis for this match.",
+                      "log_tail": log_tail(result.log_path)})
                 return
             beat.send("Saving results", 99)
             upload(match_id, "stats", result.stats_path, "application/json")
@@ -184,11 +238,18 @@ def run_job(job: dict) -> None:
                 upload(match_id, "video", result.analysis_video, "video/mp4")
             call(f"/api/worker/jobs/{match_id}/complete", {"summary": result.summary})
             say(f"match {match_id} done")
+    except JobError as exc:
+        say(f"match {match_id}: {exc}")
+        try:
+            call(f"/api/worker/jobs/{match_id}/fail", {"message": str(exc)}, tries=3)
+        except RuntimeError:
+            pass
     except Exception as exc:
         say(f"match {match_id} crashed: {exc!r}")
         try:
             call(f"/api/worker/jobs/{match_id}/fail",
-                 {"message": "Analysis stopped unexpectedly.", "retry": True}, tries=3)
+                 {"message": "Analysis stopped unexpectedly.", "retry": True,
+                  "log_tail": traceback.format_exc()[-8000:]}, tries=3)
         except RuntimeError:
             pass
     finally:

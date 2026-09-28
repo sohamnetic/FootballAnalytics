@@ -33,6 +33,7 @@ export function ProcessingPage() {
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("queued");
   const [message, setMessage] = useState("");
+  const [details, setDetails] = useState("");
   const [retrying, setRetrying] = useState(false);
   const started = useRef(Date.now());
   const [now, setNow] = useState(Date.now());
@@ -52,6 +53,7 @@ export function ProcessingPage() {
         setProgress(row.progress ?? 0);
         setStatus(row.status);
         setMessage(row.message || "");
+        setDetails(row.log_tail || "");
         if (row.status === "completed") navigate(`/matches/${matchId}`);
       } catch {
         if (!stop) setStatus("failed");
@@ -95,6 +97,16 @@ export function ProcessingPage() {
           </div>
           <h1 className="mt-6 text-2xl font-semibold tracking-tight text-white">We couldn't finish this analysis</h1>
           <p className="mt-2 text-sm leading-relaxed text-zinc-400">{message || "Something went wrong while processing the video."}</p>
+          {details ? (
+            <details className="mt-6 text-left">
+              <summary className="cursor-pointer text-center text-[12px] text-zinc-500 hover:text-zinc-300">
+                Technical details
+              </summary>
+              <pre className="mt-3 max-h-72 overflow-auto rounded-xl bg-black/40 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-zinc-400">
+                {details}
+              </pre>
+            </details>
+          ) : null}
           <div className="mt-8 flex flex-wrap justify-center gap-3">
             <Button loading={retrying} onClick={retry}>
               <RotateCcw /> Try again
