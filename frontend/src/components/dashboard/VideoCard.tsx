@@ -1,7 +1,7 @@
 import { Tabs } from "radix-ui";
 import { Clapperboard, VideoOff } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import { getToken } from "../../api/client";
+import { apiUrl, getToken } from "../../api/client";
 import { getMatchMedia } from "../../api/getMatchStats";
 import { useTeamNames } from "../../lib/teamNames";
 import { Card, CardHeader } from "../ui/Card";
@@ -30,7 +30,7 @@ export function VideoCard({ matchId, kitColors }: { matchId: string; kitColors?:
     };
   }, [matchId]);
 
-  const src = kind === "analysis" ? `/api/matches/${matchId}/analysis-video${auth}` : `/api/matches/${matchId}/video${auth}`;
+  const src = apiUrl(`/api/matches/${matchId}/${kind === "analysis" ? "analysis-video" : "video"}${auth}`);
   const none = media && !media.source_video && !media.analysis_video;
 
   return (

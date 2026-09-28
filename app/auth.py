@@ -1,50 +1,41 @@
-"""Local email/password accounts. Not production-grade auth."""
+"""Email/password accounts, stored as users.json in storage (data/ or the S3 bucket).
+
+Simple on purpose: salted PBKDF2 passwords, HMAC-signed tokens, and a limit
+on failed logins so passwords can't be guessed quickly."""
 
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
-import os
 import re
 import secrets
 import threading
 import time
 import uuid
-from pathlib import Path
 
-from config.config import PROJECT_ROOT
+from app.settings import secret
+from app.storage import get_storage
 
-USERS_PATH = PROJECT_ROOT / "data" / "users.json"
-SECRET_PATH = PROJECT_ROOT / "data" / "secret.txt"
+USERS_KEY = "users.json"
 TOKEN_TTL_S = 60 * 60 * 24 * 14
 
+# failed logins allowed per email (and per client address) in the window
+LOGIN_MAX_FAILS = 8
+LOGIN_WINDOW_S = 15 * 60
+
 _lock = threading.Lock()
+_users: list | None = None
+_fails: dict[str, list[float]] = {}
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-def _secret() -> str:
-    SECRET_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if SECRET_PATH.exists():
-        return SECRET_PATH.read_text(encoding="utf-8").strip()
-    value = os.environ.get("FA_SECRET") or secrets.token_hex(32)
-    SECRET_PATH.write_text(value, encoding="utf-8")
-    return value
-
-
 def _load_users() -> list:
-    USERS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if not USERS_PATH.exists():
-        USERS_PATH.write_text("[]", encoding="utf-8")
-    try:
-        data = json.loads(USERS_PATH.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def _save_users(rows: list) -> None:
-    USERS_PATH.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    global _users
+    if _users is None:
+        data = get_storage().read_json(USERS_KEY)
+        _users = data if isinstance(data, list) else []
+    return _users
 
 
 def _hash_password(password: str, salt: str) -> str:
@@ -82,26 +73,47 @@ def create_user(email: str, password: str, name: str = "") -> dict:
             "created_at": time.time(),
         }
         users.append(row)
-        _save_users(users)
+        get_storage().write_json(USERS_KEY, users)
         return _public_user(row)
 
 
-def authenticate(email: str, password: str) -> dict:
-    email = email.strip().lower()
+def _too_many_fails(*keys: str) -> bool:
+    cutoff = time.time() - LOGIN_WINDOW_S
     with _lock:
-        users = _load_users()
+        for key in keys:
+            recent = [t for t in _fails.get(key, []) if t > cutoff]
+            _fails[key] = recent
+            if len(recent) >= LOGIN_MAX_FAILS:
+                return True
+    return False
+
+
+def _note_fail(*keys: str) -> None:
+    with _lock:
+        for key in keys:
+            _fails.setdefault(key, []).append(time.time())
+
+
+def authenticate(email: str, password: str, client: str = "") -> dict:
+    email = email.strip().lower()
+    keys = (f"email:{email}", f"ip:{client}") if client else (f"email:{email}",)
+    if _too_many_fails(*keys):
+        raise PermissionError("Too many failed attempts. Try again in 15 minutes.")
+    with _lock:
+        users = list(_load_users())
     for row in users:
         if row.get("email") != email:
             continue
         check = _hash_password(password, row.get("salt", ""))
         if hmac.compare_digest(check, row.get("password_hash", "")):
             return _public_user(row)
+    _note_fail(*keys)
     raise ValueError("Invalid email or password")
 
 
 def get_user(user_id: str) -> dict | None:
     with _lock:
-        users = _load_users()
+        users = list(_load_users())
     for row in users:
         if row.get("id") == user_id:
             return _public_user(row)
@@ -115,7 +127,7 @@ def issue_token(user: dict) -> str:
         "exp": int(time.time()) + TOKEN_TTL_S,
     }
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8").hex()
-    sig = hmac.new(_secret().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+    sig = hmac.new(secret().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
     return f"{body}.{sig}"
 
 
@@ -124,7 +136,7 @@ def parse_token(token: str) -> dict:
         body, sig = token.split(".", 1)
     except ValueError as exc:
         raise ValueError("Invalid token") from exc
-    expect = hmac.new(_secret().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+    expect = hmac.new(secret().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expect, sig):
         raise ValueError("Invalid token")
     payload = json.loads(bytes.fromhex(body).decode("utf-8"))

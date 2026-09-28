@@ -87,14 +87,28 @@ export const handlers = [
     return HttpResponse.json({ matches: rows });
   }),
 
-  http.post("/api/matches/upload", async () => {
-    await delay(1200);
+  http.post("/api/matches/uploads", async ({ request }) => {
+    const body = (await request.json()) as { filename: string; size: number };
+    const partSize = 64 * 1024 * 1024;
     const row: Row = {
       match_id: `demo-${String(rows.length + 1).padStart(4, "0")}-${Date.now()}`,
-      filename: "new_upload.mp4", status: "uploaded", team_a: "Team A", team_b: "Team B",
+      filename: body.filename, status: "uploaded", team_a: "Team A", team_b: "Team B",
       camera: "Camera 001", created_at: new Date().toISOString(),
     };
     rows.unshift(row);
+    const count = Math.max(1, Math.ceil(body.size / partSize));
+    return HttpResponse.json({
+      match_id: row.match_id, upload_id: "demo", part_size: partSize,
+      urls: Array.from({ length: count }, (_, i) => `/mock-upload/${i + 1}`),
+    });
+  }),
+  http.put("/mock-upload/:n", async ({ params }) => {
+    await delay(800);
+    return new HttpResponse(null, { status: 200, headers: { ETag: `"demo-${params.n}"` } });
+  }),
+  http.post("/api/matches/:id/upload/complete", ({ params }) => {
+    const row = find(params.id);
+    if (!row) return HttpResponse.json({ detail: "Match not found" }, { status: 404 });
     return HttpResponse.json({ match_id: row.match_id, filename: row.filename, status: row.status, bytes: 0 });
   }),
 

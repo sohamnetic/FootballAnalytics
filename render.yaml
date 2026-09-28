@@ -1,0 +1,38 @@
+# Render settings for the API. You can also create the web service by hand
+# (New > Web Service) with the same commands, which never asks for a card;
+# see docs/DEPLOY.md. Values marked sync: false are yours to fill in.
+services:
+  - type: web
+    name: tactivision-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: FA_STORAGE
+        value: s3
+      - key: FA_RUNNER
+        value: kaggle
+      - key: FA_SECRET
+        generateValue: true
+      - key: FA_WORKER_TOKEN
+        generateValue: true
+      - key: FA_ALLOWED_ORIGINS
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: KAGGLE_USERNAME
+        sync: false
+      - key: KAGGLE_KEY
+        sync: false

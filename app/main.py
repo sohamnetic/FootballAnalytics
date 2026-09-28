@@ -1,56 +1,61 @@
 """
-Local Football Analytics product API.
+Football Analytics product API.
 
-Run: python -m uvicorn app.main:app --reload --port 8000
+Run locally: python -m uvicorn app.main:app --reload --port 8000
+Cloud setup (Vercel + Render + Backblaze B2 + Kaggle): docs/DEPLOY.md
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
+import math
 import re
+import time
 import uuid
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
+from app import jobs, settings
 from app.auth import authenticate, create_user, issue_token, parse_token
-from app.jobs import enqueue, start_worker
+from app.storage import LocalStorage, get_storage
 from app.store import (
-    UPLOADS_DIR,
+    ANALYSIS_VIDEO_FILE,
+    STATS_FILE,
     delete_match,
-    ensure_dirs,
+    ensure_loaded,
+    fail_interrupted_jobs,
     get_match,
     list_matches,
-    match_output_dir,
-    match_upload_dir,
     now_iso,
-    stats_path,
+    result_key,
+    storage_used_bytes,
+    upload_key,
     upsert_match,
 )
-from config.config import PROJECT_ROOT
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("football.api")
 
 ALLOWED_EXT = {".mp4", ".mov", ".avi", ".mkv"}
-MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024  # 8 GB local prototype
+CONTENT_TYPES = {".mp4": "video/mp4", ".mov": "video/quicktime", ".avi": "video/x-msvideo", ".mkv": "video/x-matroska"}
 MATCH_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+PART_BYTES = settings.UPLOAD_PART_BYTES
 
 app = FastAPI(title="TactiVision", version="mvp-product")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-    ],
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origin_regex=settings.ALLOWED_ORIGIN_REGEX or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["ETag"],
 )
 
 
@@ -67,6 +72,21 @@ class AuthBody(BaseModel):
     email: str = Field(min_length=3, max_length=120)
     password: str = Field(min_length=6, max_length=120)
     name: str = Field(default="", max_length=80)
+
+
+class UploadStart(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    size: int = Field(gt=0)
+
+
+class UploadPart(BaseModel):
+    number: int = Field(ge=1, le=10000)
+    etag: str = Field(max_length=200)
+
+
+class UploadFinish(BaseModel):
+    upload_id: str = Field(max_length=1024)
+    parts: list[UploadPart]
 
 
 def current_user(
@@ -86,22 +106,19 @@ def current_user(
         raise HTTPException(status_code=401, detail="Please sign in again") from exc
 
 
-def _first_analysis_video(match_id: str) -> Path | None:
-    """The analysis video, if it was made (the old debug videos don't play in browsers)."""
-    videos = sorted((match_output_dir(match_id) / "analysis").glob("analysis_video*.mp4"))
-    videos = [v for v in videos if not v.name.endswith(".part.mp4") and v.is_file()]
-    return videos[0] if videos else None
-
-
-def _owns_match(row: dict, user: dict) -> bool:
-    owner = row.get("user_id")
-    return owner in (None, "", user["id"])
-
-
 def _valid_id(match_id: str) -> str:
     if not MATCH_ID_RE.match(match_id):
         raise HTTPException(status_code=400, detail="Invalid match id")
     return match_id
+
+
+def _my_match(match_id: str, user: dict) -> dict:
+    row = get_match(_valid_id(match_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if row.get("user_id") not in (None, "", user["id"]):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    return row
 
 
 def _safe_filename(name: str) -> str:
@@ -113,17 +130,44 @@ def _safe_filename(name: str) -> str:
     return f"{stem}{ext}"
 
 
+def _client(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
+def _has_analysis_video(row: dict) -> bool:
+    if "has_analysis_video" in row:
+        return bool(row["has_analysis_video"])
+    return bool(get_storage().size(result_key(row["match_id"], ANALYSIS_VIDEO_FILE)))
+
+
+def _has_source_video(row: dict) -> bool:
+    return bool(row.get("video_key")) and not row.get("source_deleted") and row.get("status") != "uploading"
+
+
 @app.on_event("startup")
 def _startup():
-    ensure_dirs()
-    start_worker()
-    log.info("Football Analytics API ready. project=%s uploads=%s", PROJECT_ROOT, UPLOADS_DIR)
+    ensure_loaded()
+    if settings.RUNNER == "local":
+        stuck = fail_interrupted_jobs()
+        if stuck:
+            log.warning("Marked %d interrupted analysis job(s) as failed", stuck)
+    jobs.start_background()
+    storage = get_storage()
+    if hasattr(storage, "ensure_cors") and settings.ALLOWED_ORIGINS:
+        if not storage.ensure_cors(settings.ALLOWED_ORIGINS):
+            log.warning("Couldn't set CORS on the bucket; see docs/DEPLOY.md")
+    log.info("API ready. storage=%s runner=%s", settings.STORAGE, settings.RUNNER)
 
 
 @app.get("/api/health")
 def health():
     return {"ok": True}
 
+
+# ---------------------------------------------------------------- accounts
 
 @app.post("/api/auth/signup")
 def signup(body: AuthBody):
@@ -135,9 +179,11 @@ def signup(body: AuthBody):
 
 
 @app.post("/api/auth/login")
-def login(body: AuthBody):
+def login(body: AuthBody, request: Request):
     try:
-        user = authenticate(body.email, body.password)
+        user = authenticate(body.email, body.password, _client(request))
+    except PermissionError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     return {"user": user, "token": issue_token(user)}
@@ -148,47 +194,37 @@ def me(user: dict = Depends(current_user)):
     return {"user": user}
 
 
-@app.post("/api/matches/upload")
-async def upload_match(file: UploadFile = File(...), user: dict = Depends(current_user)):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Missing filename")
-    filename = _safe_filename(file.filename)
+# ---------------------------------------------------------------- uploads
+# The browser sends the video straight to storage in parts:
+#   1. POST /api/matches/uploads          -> match id + one link per part
+#   2. PUT each part to its link          (the bucket, or /api/files locally)
+#   3. POST /api/matches/{id}/upload/complete with the part ETags
+
+@app.post("/api/matches/uploads")
+def start_upload(body: UploadStart, user: dict = Depends(current_user)):
+    filename = _safe_filename(body.filename)
     ext = Path(filename).suffix.lower()
+    if body.size > settings.MAX_UPLOAD_BYTES:
+        limit = settings.MAX_UPLOAD_BYTES / 1024**3
+        raise HTTPException(status_code=413, detail=f"Videos can be up to {limit:.0f} GB")
+    if settings.STORAGE_LIMIT_BYTES and storage_used_bytes() + body.size > settings.STORAGE_LIMIT_BYTES:
+        raise HTTPException(status_code=507, detail="Storage is full. Delete an old match first.")
+
     match_id = str(uuid.uuid4())
-    dest_dir = match_upload_dir(match_id)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / f"video{ext}"
-
-    size = 0
-    try:
-        with dest.open("wb") as out:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
-                    out.close()
-                    dest.unlink(missing_ok=True)
-                    raise HTTPException(status_code=413, detail="File too large")
-                out.write(chunk)
-    finally:
-        await file.close()
-
-    if size == 0:
-        dest.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="Empty file")
-
-    record = upsert_match({
+    key = upload_key(match_id, ext)
+    storage = get_storage()
+    upload_id = storage.start_upload(key, CONTENT_TYPES[ext])
+    count = max(1, math.ceil(body.size / PART_BYTES))
+    upsert_match({
         "match_id": match_id,
         "filename": filename,
-        "stored_name": dest.name,
-        "video_path": str(dest.resolve()),
-        "bytes": size,
-        "status": "uploaded",
+        "stored_name": Path(key).name,
+        "video_key": key,
+        "bytes": body.size,
+        "status": "uploading",
         "progress": 0,
-        "stage": "uploaded",
-        "message": "Video uploaded.",
+        "stage": "uploading",
+        "message": "Uploading video...",
         "team_a": "Team A",
         "team_b": "Team B",
         "camera": "Camera 001",
@@ -198,38 +234,65 @@ async def upload_match(file: UploadFile = File(...), user: dict = Depends(curren
         "created_at": now_iso(),
         "error": None,
         "user_id": user["id"],
+        "upload_id": upload_id,
     })
     return {
         "match_id": match_id,
-        "filename": filename,
-        "status": "uploaded",
-        "bytes": size,
-        "created_at": record["created_at"],
+        "upload_id": upload_id,
+        "part_size": PART_BYTES,
+        "urls": [storage.part_url(key, upload_id, n) for n in range(1, count + 1)],
     }
 
 
+@app.post("/api/matches/{match_id}/upload/complete")
+def finish_upload(match_id: str, body: UploadFinish, user: dict = Depends(current_user)):
+    row = _my_match(match_id, user)
+    if row.get("status") != "uploading" or row.get("upload_id") != body.upload_id:
+        raise HTTPException(status_code=409, detail="This upload is not in progress")
+    storage = get_storage()
+    try:
+        storage.finish_upload(row["video_key"], body.upload_id, [p.model_dump() for p in body.parts])
+    except Exception as exc:
+        log.exception("Could not finish upload %s", match_id)
+        raise HTTPException(status_code=400, detail="Upload was incomplete. Please try again.") from exc
+    size = storage.size(row["video_key"]) or 0
+    if size != row.get("bytes"):
+        storage.delete(row["video_key"])
+        delete_match(match_id)
+        raise HTTPException(status_code=400, detail="Upload was incomplete. Please try again.")
+    record = upsert_match({
+        "match_id": match_id, "status": "uploaded", "stage": "uploaded",
+        "message": "Video uploaded.", "upload_id": None,
+    })
+    return {"match_id": match_id, "filename": record["filename"], "status": "uploaded",
+            "bytes": size, "created_at": record["created_at"]}
+
+
+@app.post("/api/matches/{match_id}/upload/abort")
+def abort_upload(match_id: str, user: dict = Depends(current_user)):
+    row = _my_match(match_id, user)
+    if row.get("status") == "uploading" and row.get("upload_id"):
+        get_storage().abort_upload(row["video_key"], row["upload_id"])
+        delete_match(match_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- matches
+
 @app.get("/api/matches")
 def matches(user: dict = Depends(current_user)):
-    return {"matches": list_matches(user["id"])}
+    rows = [r for r in list_matches(user["id"]) if r.get("status") != "uploading"]
+    return {"matches": rows}
 
 
 @app.get("/api/matches/{match_id}")
 def match_detail(match_id: str, user: dict = Depends(current_user)):
-    row = get_match(_valid_id(match_id))
-    if not row:
-        raise HTTPException(status_code=404, detail="Match not found")
-    if not _owns_match(row, user):
-        raise HTTPException(status_code=403, detail="Not allowed")
-    return row
+    return _my_match(match_id, user)
 
 
 @app.delete("/api/matches/{match_id}")
 def remove_match(match_id: str, user: dict = Depends(current_user)):
-    row = get_match(_valid_id(match_id))
-    if not row:
-        raise HTTPException(status_code=404, detail="Match not found")
-    if not _owns_match(row, user):
-        raise HTTPException(status_code=403, detail="Not allowed")
+    row = _my_match(match_id, user)
     if row.get("status") in {"queued", "processing"}:
         raise HTTPException(status_code=409, detail="Wait until analysis finishes")
     delete_match(match_id)
@@ -238,13 +301,13 @@ def remove_match(match_id: str, user: dict = Depends(current_user)):
 
 @app.post("/api/matches/{match_id}/analyze")
 def analyze(match_id: str, body: AnalyzeBody, user: dict = Depends(current_user)):
-    row = get_match(_valid_id(match_id))
-    if not row:
-        raise HTTPException(status_code=404, detail="Match not found")
-    if not _owns_match(row, user):
-        raise HTTPException(status_code=403, detail="Not allowed")
+    row = _my_match(match_id, user)
     if row.get("status") in {"queued", "processing"}:
         raise HTTPException(status_code=409, detail="Analysis already running")
+    if row.get("status") == "uploading":
+        raise HTTPException(status_code=409, detail="The upload hasn't finished")
+    if row.get("source_deleted"):
+        raise HTTPException(status_code=409, detail="The original video was removed after analysis. Upload it again.")
 
     start_time = 0.0
     duration = None
@@ -267,17 +330,13 @@ def analyze(match_id: str, body: AnalyzeBody, user: dict = Depends(current_user)
         "duration_s": duration,
         "error": None,
     })
-    enqueue(match_id)
+    jobs.enqueue(match_id)
     return {"match_id": match_id, "status": "queued"}
 
 
 @app.get("/api/matches/{match_id}/status")
 def status(match_id: str, user: dict = Depends(current_user)):
-    row = get_match(_valid_id(match_id))
-    if not row:
-        raise HTTPException(status_code=404, detail="Match not found")
-    if not _owns_match(row, user):
-        raise HTTPException(status_code=403, detail="Not allowed")
+    row = _my_match(match_id, user)
     return {
         "match_id": row["match_id"],
         "status": row.get("status"),
@@ -293,57 +352,184 @@ def status(match_id: str, user: dict = Depends(current_user)):
 
 @app.get("/api/matches/{match_id}/stats")
 def stats(match_id: str, user: dict = Depends(current_user)):
-    row = get_match(_valid_id(match_id))
-    if not row:
-        raise HTTPException(status_code=404, detail="Match not found")
-    if not _owns_match(row, user):
-        raise HTTPException(status_code=403, detail="Not allowed")
+    row = _my_match(match_id, user)
     if row.get("status") != "completed":
         raise HTTPException(status_code=409, detail="Stats not ready")
-    path = stats_path(match_id)
-    if not path.exists():
+    payload = get_storage().read_json(result_key(match_id, STATS_FILE))
+    if payload is None:
         raise HTTPException(status_code=404, detail="Stats file missing")
-    import json
-    return json.loads(path.read_text(encoding="utf-8"))
+    return payload
 
 
 @app.get("/api/matches/{match_id}/media")
 def media(match_id: str, user: dict = Depends(current_user)):
-    row = get_match(_valid_id(match_id))
-    if not row:
-        raise HTTPException(status_code=404, detail="Match not found")
-    if not _owns_match(row, user):
-        raise HTTPException(status_code=403, detail="Not allowed")
-    source = Path(row.get("video_path") or "")
-    return {
-        "source_video": source.exists(),
-        "analysis_video": _first_analysis_video(match_id) is not None,
-    }
+    row = _my_match(match_id, user)
+    return {"source_video": _has_source_video(row), "analysis_video": _has_analysis_video(row)}
 
+
+# The video player can't send headers, so these take ?token= and redirect to
+# a short-lived storage link (the bucket serves the bytes, not this API).
 
 @app.get("/api/matches/{match_id}/video")
 def video(match_id: str, user: dict = Depends(current_user)):
-    row = get_match(_valid_id(match_id))
-    if not row:
-        raise HTTPException(status_code=404, detail="Match not found")
-    if not _owns_match(row, user):
-        raise HTTPException(status_code=403, detail="Not allowed")
-    path = Path(row["video_path"])
-    if not path.exists():
+    row = _my_match(match_id, user)
+    if not _has_source_video(row):
         raise HTTPException(status_code=404, detail="Video missing")
-    return FileResponse(
-        path, media_type="video/mp4", filename=row.get("filename") or path.name, content_disposition_type="inline",
-    )
+    url = get_storage().get_url(row["video_key"], row.get("filename") or "")
+    return RedirectResponse(url, status_code=307)
 
 
 @app.get("/api/matches/{match_id}/analysis-video")
 def analysis_video(match_id: str, user: dict = Depends(current_user)):
-    row = get_match(_valid_id(match_id))
-    if not row:
-        raise HTTPException(status_code=404, detail="Match not found")
-    if not _owns_match(row, user):
-        raise HTTPException(status_code=403, detail="Not allowed")
-    path = _first_analysis_video(match_id)
-    if not path:
+    row = _my_match(match_id, user)
+    if not _has_analysis_video(row):
         raise HTTPException(status_code=404, detail="No analysis video available")
-    return FileResponse(path, media_type="video/mp4", filename=path.name, content_disposition_type="inline")
+    url = get_storage().get_url(result_key(match_id, ANALYSIS_VIDEO_FILE), "analysis_video.mp4")
+    return RedirectResponse(url, status_code=307)
+
+
+# ---------------------------------------------------------------- local file links
+# Stand-ins for the bucket's presigned URLs when FA_STORAGE=local.
+
+def _local_storage() -> LocalStorage:
+    storage = get_storage()
+    if not isinstance(storage, LocalStorage):
+        raise HTTPException(status_code=404, detail="Not found")
+    return storage
+
+
+def _check(storage: LocalStorage, route: str, method: str, exp: int, sig: str) -> None:
+    if not storage.check_link(route, method, exp, sig):
+        raise HTTPException(status_code=403, detail="Link expired")
+
+
+async def _save_body(request: Request, dest: Path) -> str:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    md5 = hashlib.md5()
+    tmp = dest.with_name(dest.name + ".uploading")
+    with tmp.open("wb") as out:
+        async for chunk in request.stream():
+            md5.update(chunk)
+            out.write(chunk)
+    tmp.replace(dest)
+    return f'"{md5.hexdigest()}"'
+
+
+@app.put("/api/files/part/{upload_id}/{number}")
+async def put_part(upload_id: str, number: int, request: Request, exp: int = 0, sig: str = ""):
+    storage = _local_storage()
+    _check(storage, f"part/{upload_id}/{number}", "PUT", exp, sig)
+    etag = await _save_body(request, storage.part_path(upload_id, number))
+    return Response(status_code=200, headers={"ETag": etag})
+
+
+@app.put("/api/files/{route:path}")
+async def put_file(route: str, request: Request, exp: int = 0, sig: str = ""):
+    storage = _local_storage()
+    _check(storage, route, "PUT", exp, sig)
+    etag = await _save_body(request, storage.path(route))
+    return Response(status_code=200, headers={"ETag": etag})
+
+
+@app.get("/api/files/{route:path}")
+def get_file(route: str, exp: int = 0, sig: str = "", name: str = ""):
+    storage = _local_storage()
+    _check(storage, route, "GET", exp, sig)
+    path = storage.path(route)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    media_type = CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=name or path.name, content_disposition_type="inline")
+
+
+# ---------------------------------------------------------------- cloud worker
+
+class WorkerBody(BaseModel):
+    worker_id: str = Field(min_length=1, max_length=120)
+
+
+class HeartbeatBody(WorkerBody):
+    stage: str | None = Field(default=None, max_length=80)
+    progress: int | None = Field(default=None, ge=0, le=100)
+
+
+class ResultUrlBody(WorkerBody):
+    kind: str = Field(pattern="^(stats|video|log)$")
+
+
+class CompleteBody(WorkerBody):
+    summary: dict = Field(default_factory=dict)
+
+
+class FailBody(WorkerBody):
+    message: str = Field(default="We couldn't complete analysis for this match.", max_length=300)
+    retry: bool = False
+
+
+class ExitBody(WorkerBody):
+    reason: str = Field(default="", max_length=40)
+
+
+def worker_auth(authorization: str | None = Header(default=None)) -> None:
+    if not settings.WORKER_TOKEN:
+        raise HTTPException(status_code=503, detail="Worker access is not set up")
+    given = (authorization or "").removeprefix("Bearer ").strip()
+    if not hmac.compare_digest(given.encode(), settings.WORKER_TOKEN.encode()):
+        raise HTTPException(status_code=401, detail="Bad worker token")
+
+
+def _worker_job(match_id: str, worker_id: str) -> dict:
+    row = jobs.owned(_valid_id(match_id), worker_id)
+    if not row:
+        raise HTTPException(status_code=409, detail="This job is no longer yours")
+    return row
+
+
+@app.post("/api/worker/claim", dependencies=[Depends(worker_auth)])
+def worker_claim(body: WorkerBody):
+    return {"job": jobs.claim(body.worker_id)}
+
+
+@app.post("/api/worker/jobs/{match_id}/heartbeat", dependencies=[Depends(worker_auth)])
+def worker_heartbeat(match_id: str, body: HeartbeatBody):
+    return {"ok": jobs.heartbeat(_valid_id(match_id), body.worker_id, body.stage, body.progress)}
+
+
+@app.post("/api/worker/jobs/{match_id}/upload-url", dependencies=[Depends(worker_auth)])
+def worker_upload_url(match_id: str, body: ResultUrlBody):
+    _worker_job(match_id, body.worker_id)
+    return {"url": jobs.result_upload_url(match_id, body.kind)}
+
+
+@app.post("/api/worker/jobs/{match_id}/complete", dependencies=[Depends(worker_auth)])
+def worker_complete(match_id: str, body: CompleteBody):
+    _worker_job(match_id, body.worker_id)
+    try:
+        jobs.complete(match_id, body.summary)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/api/worker/jobs/{match_id}/fail", dependencies=[Depends(worker_auth)])
+def worker_fail(match_id: str, body: FailBody):
+    row = _worker_job(match_id, body.worker_id)
+    if body.retry:
+        jobs.requeue_or_fail(row, "worker reported a crash")
+    else:
+        jobs.fail(match_id, body.message)
+    return {"ok": True}
+
+
+@app.post("/api/worker/exit", dependencies=[Depends(worker_auth)])
+def worker_exit(body: ExitBody):
+    jobs.worker_exit(body.worker_id, body.reason)
+    return {"ok": True}
+
+
+@app.get("/api/worker/status", dependencies=[Depends(worker_auth)])
+def worker_status():
+    state = jobs.worker_status()
+    state["queued"] = [r["match_id"] for r in list_matches() if r.get("status") == "queued"]
+    state["now"] = time.time()
+    return state

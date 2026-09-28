@@ -1,4 +1,4 @@
-# Football Analytics — Architecture
+# Football Analytics â€” Architecture
 
 **Source of truth:** repository code, not README claims.  
 Companion docs: `PROJECT_TECHNICAL_AUDIT.md`, `AI_HANDOFF_CONTEXT.md`, `INTERVIEW_PREPARATION.md`, `RESUME_PROJECT_DESCRIPTION.md`.  
@@ -11,31 +11,31 @@ On Windows this path may be the same file as `docs/architecture.md` (case-insens
 
 ```
 User (browser)
-  → React/Vite frontend (:5173)
-      → fetch /api/*  (Vite proxy → FastAPI :8000)
-          → data/uploads/{match_id}/video.*
-          → data/matches_index.json  (match metadata)
-          → data/users.json          (accounts)
-          → background worker (1 daemon thread)
-              → subprocess: python -m scripts.pipeline.run_mvp
+  â†’ React/Vite frontend (:5173)
+      â†’ fetch /api/*  (Vite proxy â†’ FastAPI :8000)
+          â†’ data/uploads/{match_id}/video.*
+          â†’ data/matches_index.json  (match metadata)
+          â†’ data/users.json          (accounts)
+          â†’ background worker (1 daemon thread)
+              â†’ subprocess: python -m scripts.pipeline.run_mvp
                   FA_OUTPUT_DIR=outputs/matches/{match_id}
                   --video uploaded file --force-track
                   [optional --start-time --duration]
-              → YOLO11m + ByteTrack (persons, buffer 90)
-              → YOLO11n predict class 32 (ball, no tracker) → ball_filter (static look-alikes)
-              → goal_yolo11n every 0.1 s (goal posts + net) → goals tracked through camera motion
-              → IdentityManager (provisional online stable_id)
-              → TrackletFeatureCollector (turf, kit, ReID, OCR, camera motion)
-              → CoordinateLogger CSV
-              → resolve_identities → CSV stable_id rewritten, non-players dropped
-              → MotionEngine + HeatmapEngine
-              → PossessionEngine → frame_state CSV
-              → team_assigner (identity kit groups; goalkeepers by goal proximity; referee excluded)
-              → passes / turnovers / shots (post-process; shots against detected goals)
-              → match_stats.json
-              → analysis video (H.264 via ffmpeg) for the dashboard's Tracking view
-          → GET /api/matches/{id}/stats
-  → Dashboard renders JSON
+              â†’ YOLO11m + ByteTrack (persons, buffer 90)
+              â†’ YOLO11n predict class 32 (ball, no tracker) â†’ ball_filter (static look-alikes)
+              â†’ goal_yolo11n every 0.1 s (goal posts + net) â†’ goals tracked through camera motion
+              â†’ IdentityManager (provisional online stable_id)
+              â†’ TrackletFeatureCollector (turf, kit, ReID, OCR, camera motion)
+              â†’ CoordinateLogger CSV
+              â†’ resolve_identities â†’ CSV stable_id rewritten, non-players dropped
+              â†’ MotionEngine + HeatmapEngine
+              â†’ PossessionEngine â†’ frame_state CSV
+              â†’ team_assigner (identity kit groups; goalkeepers by goal proximity; referee excluded)
+              â†’ passes / turnovers / shots (post-process; shots against detected goals)
+              â†’ match_stats.json
+              â†’ analysis video (H.264 via ffmpeg) for the dashboard's Tracking view
+          â†’ GET /api/matches/{id}/stats
+  â†’ Dashboard renders JSON
 ```
 
 ## Stage-by-stage (verified)
@@ -46,7 +46,7 @@ User (browser)
 | Player detection | `scripts/track.py` | `yolo11m` `YOLO.track` `imgsz=1280` `conf=0.30` `classes=[0]` | Yes |
 | Ball detection | `scripts/track.py`, `scripts/vision/ball_filter.py` | `yolo11n` `ball_model.predict` `classes=[32]` `conf=0.10` `imgsz=1280`; `select_balls` | Yes |
 | Goal detection | `scripts/vision/goals.py` | `GoalDetector` (`models/goal_yolo11n.pt`), `smooth_goals` | Yes |
-| Tracking | Ultralytics ByteTrack | `config/bytetrack.yaml` `persist=True`, `track_buffer: 90` | Yes |
+| Tracking | Ultralytics ByteTrack | `config/bytetrack.yaml` `persist=True`, track buffer 1.5 s (`TRACK_BUFFER_S`) | Yes |
 | Identity (provisional) | `scripts/identity/identity_manager.py` | `IdentityManager.assign_frame` | Yes |
 | Identity (final) | `scripts/identity/tracklet_features.py`, `resolver.py` | `TrackletFeatureCollector`, `resolve_identities` | Yes |
 | Coordinate log | `scripts/coordinate_logger.py` | `CoordinateLogger.log` | Yes |
@@ -60,20 +60,26 @@ User (browser)
 | Analysis video | `scripts/analytics/analysis_video.py` | `render_analysis_video` (ffmpeg libx264) | Yes |
 | API | `app/main.py` | FastAPI | Yes |
 | Frontend dashboard | `frontend/src/pages/DashboardPage.tsx` | consumes JSON only | Yes |
-| Homography / metres | — | — | **NOT IMPLEMENTED** in event path |
-| Broadcast xG / tackles / assists | — | — | **NOT IMPLEMENTED** |
+| Homography / metres | â€” | â€” | **NOT IMPLEMENTED** in event path |
+| Broadcast xG / tackles / assists | â€” | â€” | **NOT IMPLEMENTED** |
 | Dashboard playback of match video | `frontend/src/components/dashboard/VideoCard.tsx` | Footage / Tracking (analysis video) toggle | Yes |
 
 ## Data stores
 
-| Path | Role |
+Web app files go through `app/storage.py`: a folder (`data/`) locally, or x, see `docs/DEPLOY.md`).
+
+| Key (under `data/` locally) | Role |
 |---|---|
-| `data/uploads/{uuid}/video.ext` | Original upload |
-| `data/matches_index.json` | Match list (not a database) |
-| `data/users.json` | Local accounts (gitignored) |
-| `data/secret.txt` | HMAC token secret (gitignored) |
+| `uploads/{uuid}/video.ext` | Original upload (deleted after analysis in the cloud) |
+| `results/{uuid}/match_stats.json` | Stats the dashboard reads |
+| `results/{uuid}/analysis_video.mp4` | Dashboard "Tracking" video |
+| `results/{uuid}/pipeline.log` | Last 600 lines the pipeline printed |
+| `matches_index.json` | Match list (not a database; the API is the only writer) |
+| `users.json` | Accounts |
+| `worker_state.json` | When the cloud worker was last started / seen |
+| `data/secret.txt` | HMAC token secret, local only (`FA_SECRET` in the cloud) |
 | `outputs/` | Default CLI outputs |
-| `outputs/matches/{match_id}/` | Isolated product-job outputs (`FA_OUTPUT_DIR`) |
+| `outputs/matches/{match_id}/` | Working folder of a local analysis run (`FA_OUTPUT_DIR`) |
 | `models/yolo11n.pt` | Ultralytics YOLO11n COCO weights |
 | `models/goal_yolo11n.pt` | Goal detector fine-tuned in this repo (committed; not downloadable) |
 | `<coordinates>/<stem>_goals.csv` | Goal boxes per frame (written by tracking) |
@@ -94,14 +100,14 @@ User (browser)
 
 | Entity | `center_x` / `center_y` in CSV |
 |---|---|
-| Person | bbox bottom-centre: `((x1+x2)/2, y2)` — used as “feet” |
+| Person | bbox bottom-centre: `((x1+x2)/2, y2)` â€” used as â€œfeetâ€ |
 | Ball | geometric bbox centre, passed as `bbox_center_x/y` |
 
 `time_s` in frame_state: `(frame - 1) / fps`.
 
 ## What PitchMapper actually does
 
-`scripts/analytics/pitch_mapper.py` scales `center_x/1920`, `center_y/1080` onto `assets/pitch.png`. It is **not** used by possession, passes, shots, or match_stats. `data/pitch/pitch_dimensions.py` (40×20 m) is **unused** by the event pipeline.
+`scripts/analytics/pitch_mapper.py` scales `center_x/1920`, `center_y/1080` onto `assets/pitch.png`. It is **not** used by possession, passes, shots, or match_stats. `data/pitch/pitch_dimensions.py` (40Ã—20 m) is **unused** by the event pipeline.
 
 ROI `data/roi/camera_001.json` is a pitch quadrilateral in image pixels for one camera pose; with a panning camera it does not track the pitch and is **not** used to filter people or for shots.
 
@@ -115,7 +121,7 @@ tracker buffer, the rest occlusions. Roughly half of all tracks were not
 players at all (spectators, bench, staff, board logos, netting).
 
 **At the source.** Person tracking uses `yolo11m` (fewer dropouts than
-`yolo11n`) with ByteTrack `track_buffer: 90`. BoT-SORT's camera-motion
+`yolo11n`) with a ByteTrack buffer of 1.5 s (`TRACK_BUFFER_S`; 90 frames at 60 fps). BoT-SORT's camera-motion
 compensation was tested and did not reduce fragments (pans are slow; the
 losses are exits and dropouts), so ByteTrack stays.
 
@@ -126,15 +132,15 @@ same decode as tracking, no second video pass):
 |---|---|---|
 | Turf score | fraction of turf-coloured pixels in a band around the feet (`IDENTITY_TURF_HSV_*`) | player vs spectator/bench |
 | Kit hue + saturation | torso hue histogram, turf pixels excluded | kit group; "wears a kit at all" |
-| Person ReID | LMBN (DukeMTMC) via boxmot, every 3rd appearance per track | appearance similarity |
-| Jersey number | EasyOCR digits, every 4th appearance of boxes >= 90px, capped per track | strongest same/different evidence |
+| Person ReID | LMBN (DukeMTMC) via boxmot, every `IDENTITY_REID_EVERY_S` | appearance similarity |
+| Jersey number | EasyOCR digits, every `IDENTITY_OCR_EVERY_S` per track on boxes >= 90px, capped per track | strongest same/different evidence |
 | Camera motion | background optical flow -> similarity transform chained to frame 1 | pan-compensated positions |
 
 **Resolution** (`scripts/identity/resolver.py`, runs at the end of
 `run_tracking`, rewrites `stable_id` in the coordinate CSV and drops
 non-player person rows; report in `outputs/.../identity/identity_resolution_*.json`):
 
-1. *Player gate*: >= 10 detections and (turf >= 0.55 with kit saturation
+1. *Player gate*: at least `IDENTITY_MIN_TRACKLET_S` of detections and (turf >= 0.55 with kit saturation
    >= 0.45, or turf >= 0.30 with saturation >= 0.80 for the referee/keepers
    near the boards).
 2. *Kit group*: dominant torso hue bin. Different kits never merge.
@@ -184,7 +190,7 @@ writing.
   `IDENTITY_TURF_HSV_*` checked. Kit grouping by hue fails for two kits of
   the same hue or for black/white/grey kits.
 - Runtime: identity evidence roughly doubles tracking time (ReID + OCR);
-  `IDENTITY_OCR_EVERY` / `IDENTITY_OCR_MAX_PER_TRACK` / `IDENTITY_REID_EVERY`
+  `IDENTITY_OCR_EVERY_S` / `IDENTITY_OCR_MAX_PER_TRACK` / `IDENTITY_REID_EVERY_S`
   trade accuracy for speed. `IDENTITY_RESOLVER_ENABLED = False` falls back to
   the provisional online `IdentityManager` ids.
 
@@ -283,3 +289,43 @@ The per-stage overlays (annotated tracking video, possession, teams, shot
 validation) are written by OpenCV as MPEG-4 Part 2, which browsers can't
 play, at ~0.5-0.9 GB each per 5 minutes. They are off unless
 `FA_DEBUG_VIDEOS=1`, and the API never serves them.
+
+## 30 fps analysis (2026-09-28)
+
+Videos above `ANALYSIS_FPS` (30) are converted to 30 fps H.264 before
+analysis (`scripts/pipeline/prepare_video.py`, ffmpeg with GPU decode and
+encode when available; only the analysed window is converted). Tracking the
+37-min 60 fps upload's 10:00-15:00 took 14.7 min instead of 37 min. Set
+`FA_ANALYSIS_FPS=0` to analyse at the source frame rate.
+
+To behave the same at any frame rate, every tracker and identity setting is
+in seconds: tracker memory `TRACK_BUFFER_S`, `IDENTITY_MIN_TRACKLET_S`,
+`IDENTITY_REID_EVERY_S`, `IDENTITY_OCR_EVERY_S`, the co-visibility limit in
+the resolver, and minimum possession durations (rounded up so a lower frame
+rate never makes them easier). At 30 fps ByteTrack gets a looser match
+(`TRACK_MATCH_THRESH_30FPS`, players move twice as far per frame), and each
+new track's first frame, which ByteTrack does not output, is added back from
+the raw detections.
+
+Checks:
+- 40 s identity clip, same instants: 60 fps precision/recall 1.00/1.00;
+  30 fps 1.00/1.00, 13 ids.
+- 10:00-15:00 of the 37-min upload, 60 vs 30 fps: 0 goals both, passes
+  18/18, interceptions 17/22, shots 3/4. Of the 26 events only one run
+  found, checked by eye: 30 fps-only 7 real / 3 wrong / 6 unclear, 60
+  fps-only 3 real / 2 wrong / 5 unclear.
+- 5-min 30 fps upload re-run with these settings: 0 goals, 4 shots (the
+  3 confirmed real shots kept), 28 passes, 11 interceptions, 32 ids (was
+  27). The id count on long videos moves between ~25 and ~32 with small
+  changes in the shirt-number evidence, so it is noisy either way.
+
+## Cloud deployment (2026-09-28)
+
+Vercel (site) + Render free (API) + Backblaze B2 or any S3-compatible bucket (files) + Kaggle GPU notebook (analysis). Setup steps are in `docs/DEPLOY.md`.
+
+- `app/settings.py`: all settings from environment variables; the API never imports `config.config` (it pulls in torch, which Render's free instance can't hold).
+- `app/storage.py`: x. Browser uploads go straight to storage in 64 MB multipart parts; the player gets a 307 redirect to a presigned link. Locally the links are signed `/api/files/...` routes.
+- `app/jobs.py`: `FA_RUNNER=local` keeps the old in-process thread. `kaggle`/`external` queue the job; a worker claims it through `/api/worker/*` (bearer `FA_WORKER_TOKEN`), sends a heartbeat every minute and uploads results to presigned links. A job silent for `FA_WORKER_STALE_S` is requeued once, then failed. `kick()` pushes the Kaggle notebook when jobs wait and no worker has been seen, at most once per boot window.
+- `app/kaggle_launcher.py`: pushes a private script notebook (GPU + internet) that clones the repo at `RENDER_GIT_COMMIT` and runs `scripts/cloud/worker.py --setup`.
+- `app/pipeline_runner.py`: runs `run_mvp` and maps its output to progress; shared by the local runner and the worker.
+- Checked on this machine: `tests/test_cloud_jobs.py` (start/requeue logic with a fake Kaggle), the whole upload â†’ worker â†’ results â†’ playback â†’ delete flow against local storage and against a moto S3 server standing in for the bucket, and the browser upload (CORS preflight, part PUTs, ETags) against moto. Not checked yet: a real Kaggle run (package install on Kaggle's image, T4 speed).

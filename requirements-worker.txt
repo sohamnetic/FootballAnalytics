@@ -1,0 +1,8 @@
+# Installed by scripts/cloud/worker.py --setup on the Kaggle GPU notebook.
+# Kaggle's image already has torch (CUDA), OpenCV, numpy, pandas, scipy and
+# PyYAML. boxmot is installed separately with --no-deps (see worker.py).
+ultralytics>=8.3
+easyocr>=1.7
+rich
+imageio-ffmpeg
+requests

@@ -10,7 +10,7 @@ import { Card } from "../components/ui/Card";
 import { Spinner } from "../components/ui/Spinner";
 import { cn } from "../lib/cn";
 
-// same as STAGE_PROGRESS in app/jobs.py
+// same as STAGE_PROGRESS in app/pipeline_runner.py
 const STAGES: [string, number][] = [
   ["Preparing video", 5],
   ["Detecting & tracking players", 12],
@@ -162,6 +162,11 @@ export function ProcessingPage() {
             </Link>
             .
           </p>
+          {status === "queued" && message ? (
+            <p className="mt-4 flex items-center gap-2 text-sm text-zinc-300">
+              <Spinner className="size-4 text-pitch-300" /> {message}
+            </p>
+          ) : null}
         </div>
       </div>
 

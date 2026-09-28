@@ -1,60 +1,77 @@
-"""Runs the analysis in the background (calls run_mvp)."""
+"""
+Starting and tracking analyses.
+
+FA_RUNNER=local     analyse on this machine in a background thread
+FA_RUNNER=kaggle    queue the job and start a Kaggle GPU notebook, which runs
+                    scripts/cloud/worker.py and talks back through /api/worker
+FA_RUNNER=external  same queue, but you start the worker yourself
+
+In the cloud modes the worker claims queued jobs one at a time, sends a
+heartbeat while it works, uploads the results straight to storage and then
+reports back. A job whose worker goes quiet is put back in the queue.
+"""
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import queue
-import shutil
-import subprocess
-import sys
 import threading
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config.config import PROJECT_ROOT
+from app import settings
+from app.pipeline_runner import run_pipeline
+from app.storage import get_storage
 from app.store import (
-    error_log_path,
+    ANALYSIS_VIDEO_FILE,
+    LOG_FILE,
+    STATS_FILE,
+    delete_match,
     get_match,
+    list_matches,
     match_output_dir,
-    stats_path,
+    result_key,
     upsert_match,
 )
 
 log = logging.getLogger("football.jobs")
 
-STAGE_PROGRESS = [
-    ("Preparing video", 5, ("Football Analytics - Player Tracking", "Selected device")),
-    ("Detecting players", 12, ("Loading YOLO model", "Model loaded")),
-    ("Tracking players", 20, ("Running tracking", "Ball detector loaded", "Processed ")),
-    ("Detecting ball", 40, ("Tracking Finished", "Ball rows logged")),
-    ("Calculating possession", 55, ("Running possession",)),
-    ("Assigning teams", 65, ("Running team assignment", "Collecting jersey")),
-    ("Analyzing passes", 72, ("Running pass detection",)),
-    ("Analyzing turnovers", 80, ("Running interceptions",)),
-    ("Analyzing shots", 90, ("Running shot",)),
-    ("Generating statistics", 98, ("Building match stats",)),
-    ("Completed", 100, ("MVP pipeline finished",)),
-]
+RESULT_FILES = {
+    "stats": (STATS_FILE, "application/json"),
+    "video": (ANALYSIS_VIDEO_FILE, "video/mp4"),
+    "log": (LOG_FILE, "text/plain"),
+}
+WORKER_STATE_KEY = "worker_state.json"
+# a worker that hasn't called in this long is gone
+WORKER_SEEN_S = 180
+PUSH_RETRY_S = 600
+NO_GPU_RETRY_S = 3600
 
-_jobs: queue.Queue[str] = queue.Queue()
+_local_jobs: queue.Queue[str] = queue.Queue()
 _started = False
 _start_lock = threading.Lock()
+_state_lock = threading.Lock()
+_kick_lock = threading.Lock()
+_worker_state: dict | None = None
 
 
-def start_worker():
+def _now() -> float:
+    return time.time()
+
+
+def start_background() -> None:
     global _started
     with _start_lock:
         if _started:
             return
-        thread = threading.Thread(target=_worker_loop, name="analysis-worker", daemon=True)
-        thread.start()
+        target = _local_loop if settings.RUNNER == "local" else _watchdog_loop
+        threading.Thread(target=target, name=f"jobs-{settings.RUNNER}", daemon=True).start()
         _started = True
 
 
-def enqueue(match_id: str):
-    start_worker()
+def enqueue(match_id: str) -> None:
     upsert_match({
         "match_id": match_id,
         "status": "queued",
@@ -62,125 +79,39 @@ def enqueue(match_id: str):
         "stage": "queued",
         "message": "Waiting to start analysis...",
         "error": None,
+        "attempts": 0,
+        "queued_at": _now(),
     })
-    _jobs.put(match_id)
+    if settings.RUNNER == "local":
+        start_background()
+        _local_jobs.put(match_id)
+    else:
+        # starting a notebook takes a few seconds, don't hold up the request
+        threading.Thread(target=kick, name="kick", daemon=True).start()
 
 
-def _match_line(line: str) -> tuple[str, int] | None:
-    text = line.strip()
-    if not text:
-        return None
-    for stage, progress, needles in STAGE_PROGRESS:
-        if any(needle.lower() in text.lower() for needle in needles):
-            return stage, progress
-    return None
-
-
-def _worker_loop():
-    while True:
-        match_id = _jobs.get()
-        try:
-            _run_job(match_id)
-        except Exception:
-            log.exception("Job crashed match_id=%s", match_id)
-            _fail(match_id, "Analysis stopped unexpectedly.")
-        finally:
-            _jobs.task_done()
-
-
-def _run_job(match_id: str):
-    record = get_match(match_id)
-    if not record:
-        return
-    video = Path(record["video_path"])
-    if not video.exists():
-        _fail(match_id, "Uploaded video is missing.")
-        return
-
-    out_dir = match_output_dir(match_id)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "analytics").mkdir(parents=True, exist_ok=True)
-    video_dir = out_dir / "video"
-    video_dir.mkdir(parents=True, exist_ok=True)
-    linked = video_dir / video.name
-    if not linked.exists():
-        try:
-            os.link(video, linked)
-        except OSError:
-            pass
-
+def _progress(match_id: str, stage: str, progress: int, previous: dict) -> None:
+    changed = stage != previous.get("stage")
+    previous["stage"] = stage
     upsert_match({
         "match_id": match_id,
         "status": "processing",
-        "progress": 5,
-        "stage": "Preparing video",
+        "progress": min(int(progress), 99),
+        "stage": stage,
         "message": "Analyzing match footage...",
-        "error": None,
-    })
+        "heartbeat_at": _now(),
+    }, persist=changed)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "scripts.pipeline.run_mvp",
-        "--video",
-        str(video),
-        "--force-track",
-    ]
-    start_time = record.get("start_time_s")
-    duration = record.get("duration_s")
-    if start_time not in (None, "", 0, 0.0):
-        cmd.extend(["--start-time", str(start_time)])
-    elif start_time == 0 or start_time == 0.0:
-        cmd.extend(["--start-time", "0"])
-    if duration not in (None, ""):
-        cmd.extend(["--duration", str(duration)])
 
-    env = os.environ.copy()
-    env["FA_OUTPUT_DIR"] = str(out_dir.resolve())
-    env["PYTHONUNBUFFERED"] = "1"
-
-    log.info("Starting pipeline match_id=%s cmd=%s", match_id, cmd)
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(PROJECT_ROOT),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        env=env,
-    )
-    lines = []
-    assert proc.stdout is not None
-    for raw in proc.stdout:
-        line = raw.rstrip()
-        lines.append(line)
-        mapped = _match_line(line)
-        if mapped:
-            stage, progress = mapped
-            upsert_match({
-                "match_id": match_id,
-                "status": "processing",
-                "progress": progress,
-                "stage": stage,
-                "message": "Analyzing match footage...",
-            })
-        log.info("[%s] %s", match_id, line)
-
-    code = proc.wait()
-    log_path = error_log_path(match_id)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.write_text("\n".join(lines[-400:]), encoding="utf-8")
-
-    if code != 0:
-        log.error("Pipeline failed match_id=%s exit=%s", match_id, code)
-        _fail(match_id, "We couldn't complete analysis for this match.")
-        return
-
-    if not _finalize_stats(match_id, record, out_dir):
-        _fail(match_id, "We couldn't complete analysis for this match.")
-        return
-
-    upsert_match({
+def complete(match_id: str, summary: dict) -> dict:
+    """Mark a job done once its stats are in storage."""
+    storage = get_storage()
+    stats_bytes = storage.size(result_key(match_id, STATS_FILE))
+    if not stats_bytes:
+        raise FileNotFoundError("match stats were not uploaded")
+    video_bytes = storage.size(result_key(match_id, ANALYSIS_VIDEO_FILE)) or 0
+    record = get_match(match_id) or {}
+    update = {
         "match_id": match_id,
         "status": "completed",
         "progress": 100,
@@ -188,47 +119,274 @@ def _run_job(match_id: str):
         "message": "Analysis complete.",
         "error": None,
         "completed_at": datetime.now(timezone.utc).isoformat(),
-    })
+        "has_analysis_video": bool(video_bytes),
+        "result_bytes": stats_bytes + video_bytes,
+        "goals_a": summary.get("goals_a"),
+        "goals_b": summary.get("goals_b"),
+        "duration_s": summary.get("duration_s") or record.get("duration_s"),
+    }
+    # the analysis video shows the footage too, so the upload can go
+    if video_bytes and not settings.KEEP_SOURCE_VIDEO and record.get("video_key"):
+        storage.delete(record["video_key"])
+        update["source_deleted"] = True
+    return upsert_match(update)
 
 
-def _finalize_stats(match_id: str, record: dict, out_dir: Path) -> bool:
-    analytics = out_dir / "analytics"
-    if not analytics.exists():
-        return False
-    dest = stats_path(match_id)
-    candidates = sorted(analytics.glob("match_stats*.json"), key=lambda p: p.stat().st_mtime)
-    if not candidates:
-        return False
-    source = dest if dest.exists() else candidates[-1]
-    if source != dest:
-        shutil.copy2(source, dest)
-    try:
-        payload = json.loads(dest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    match_meta = payload.setdefault("match", {})
-    match_meta["team_a_name"] = record.get("team_a") or "Team A"
-    match_meta["team_b_name"] = record.get("team_b") or "Team B"
-    match_meta["camera"] = record.get("camera") or "Camera 001"
-    match_meta["match_id"] = match_id
-    dest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    goals_a = payload.get("teams", {}).get("team_a", {}).get("goals")
-    goals_b = payload.get("teams", {}).get("team_b", {}).get("goals")
-    upsert_match({
-        "match_id": match_id,
-        "goals_a": goals_a,
-        "goals_b": goals_b,
-        "duration_s": match_meta.get("duration_s") or record.get("duration_s"),
-    })
-    return dest.exists()
-
-
-def _fail(match_id: str, user_message: str):
+def fail(match_id: str, message: str, error: str = "failed") -> None:
     upsert_match({
         "match_id": match_id,
         "status": "failed",
         "progress": 0,
         "stage": "failed",
-        "message": user_message,
-        "error": user_message,
+        "message": message,
+        "error": error,
     })
+
+
+# ---------------------------------------------------------------- local runner
+
+def _local_loop() -> None:
+    while True:
+        match_id = _local_jobs.get()
+        _keep_awake(True)
+        try:
+            _run_local(match_id)
+        except Exception:
+            log.exception("Job crashed match_id=%s", match_id)
+            fail(match_id, "Analysis stopped unexpectedly.")
+        finally:
+            _keep_awake(False)
+            _local_jobs.task_done()
+
+
+def _keep_awake(on: bool) -> None:
+    """Stop Windows from going to sleep while a job runs (lid close still sleeps)."""
+    import sys
+
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    es_continuous, es_system_required = 0x80000000, 0x00000001
+    ctypes.windll.kernel32.SetThreadExecutionState(es_continuous | (es_system_required if on else 0))
+
+
+def _run_local(match_id: str) -> None:
+    record = get_match(match_id)
+    if not record:
+        return
+    storage = get_storage()
+    video = storage.local_path(record.get("video_key") or "")
+    if not video or not video.exists():
+        fail(match_id, "Uploaded video is missing.")
+        return
+
+    upsert_match({
+        "match_id": match_id, "status": "processing", "progress": 5,
+        "stage": "Preparing video", "message": "Analyzing match footage...", "error": None,
+    })
+    seen: dict = {}
+    result = run_pipeline(
+        video,
+        match_output_dir(match_id),
+        {**record, "match_id": match_id},
+        report=lambda stage, progress: _progress(match_id, stage, progress, seen),
+        log=lambda line: log.info("[%s] %s", match_id, line),
+    )
+    storage.put_file(result_key(match_id, LOG_FILE), result.log_path, "text/plain")
+    if not result.ok:
+        fail(match_id, "We couldn't complete analysis for this match.")
+        return
+    storage.put_file(result_key(match_id, STATS_FILE), result.stats_path, "application/json")
+    if result.analysis_video:
+        storage.put_file(result_key(match_id, ANALYSIS_VIDEO_FILE), result.analysis_video, "video/mp4")
+    complete(match_id, result.summary)
+
+
+# ------------------------------------------------------------- cloud worker side
+
+def _state() -> dict:
+    global _worker_state
+    if _worker_state is None:
+        _worker_state = get_storage().read_json(WORKER_STATE_KEY) or {}
+    return _worker_state
+
+
+def _save_state(**changes) -> None:
+    with _state_lock:
+        state = _state()
+        state.update(changes)
+        try:
+            get_storage().write_json(WORKER_STATE_KEY, state)
+        except Exception:
+            log.exception("Could not save worker state")
+
+
+def worker_seen(worker_id: str) -> None:
+    with _state_lock:
+        _state().update(last_seen=_now(), worker_id=worker_id)
+
+
+def worker_exit(worker_id: str, reason: str = "") -> None:
+    if reason == "no_gpu":
+        _save_state(last_exit=_now(), no_gpu_at=_now(), worker_id=worker_id)
+    else:
+        _save_state(last_exit=_now(), worker_id=worker_id)
+
+
+def worker_status() -> dict:
+    with _state_lock:
+        return dict(_state())
+
+
+def _queued() -> list[dict]:
+    rows = [r for r in list_matches() if r.get("status") == "queued"]
+    return sorted(rows, key=lambda r: r.get("queued_at") or 0)
+
+
+def claim(worker_id: str) -> dict | None:
+    """Give the worker the oldest queued job."""
+    worker_seen(worker_id)
+    for row in _queued():
+        match_id = row["match_id"]
+        video_key = row.get("video_key")
+        if not video_key or not get_storage().size(video_key):
+            fail(match_id, "Uploaded video is missing.")
+            continue
+        upsert_match({
+            "match_id": match_id,
+            "status": "processing",
+            "progress": 4,
+            "stage": "Preparing video",
+            "message": "A GPU picked up your match. Downloading the video...",
+            "attempts": int(row.get("attempts") or 0) + 1,
+            "worker_id": worker_id,
+            "heartbeat_at": _now(),
+        })
+        return {
+            "match_id": match_id,
+            "video_url": get_storage().get_url(video_key),
+            "video_name": Path(video_key).name,
+            "job": {k: row.get(k) for k in (
+                "team_a", "team_b", "camera", "analysis", "start_time_s", "duration_s")},
+        }
+    return None
+
+
+def owned(match_id: str, worker_id: str) -> dict | None:
+    row = get_match(match_id)
+    if row and row.get("status") == "processing" and row.get("worker_id") == worker_id:
+        return row
+    return None
+
+
+def heartbeat(match_id: str, worker_id: str, stage: str | None, progress: int | None) -> bool:
+    worker_seen(worker_id)
+    row = owned(match_id, worker_id)
+    if not row:
+        return False
+    if stage:
+        _progress(match_id, stage, progress or row.get("progress") or 0, {"stage": row.get("stage")})
+    else:
+        upsert_match({"match_id": match_id, "heartbeat_at": _now()}, persist=False)
+    return True
+
+
+def result_upload_url(match_id: str, kind: str) -> str:
+    name, content_type = RESULT_FILES[kind]
+    return get_storage().put_url(result_key(match_id, name), content_type)
+
+
+def requeue_or_fail(row: dict, why: str) -> None:
+    if int(row.get("attempts") or 0) < settings.JOB_MAX_ATTEMPTS:
+        log.warning("Requeueing %s: %s", row["match_id"], why)
+        upsert_match({
+            "match_id": row["match_id"], "status": "queued", "progress": 2, "stage": "queued",
+            "message": "The analysis machine stopped. Starting again...", "worker_id": None,
+        })
+    else:
+        fail(row["match_id"], "Analysis stopped twice on the cloud GPU. Try again later.", "worker_lost")
+
+
+def _abandoned_upload(row: dict, now: float) -> bool:
+    if row.get("status") != "uploading":
+        return False
+    try:
+        started = datetime.fromisoformat(row["created_at"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return True
+    return now - started > 24 * 3600
+
+
+def watchdog() -> None:
+    now = _now()
+    for row in list_matches():
+        if _abandoned_upload(row, now):
+            if row.get("upload_id"):
+                get_storage().abort_upload(row["video_key"], row["upload_id"])
+            delete_match(row["match_id"])
+        if row.get("status") != "processing":
+            continue
+        quiet = now - float(row.get("heartbeat_at") or 0)
+        if quiet > settings.WORKER_STALE_S:
+            requeue_or_fail(row, f"no heartbeat for {quiet:.0f}s")
+    kick()
+
+
+def _watchdog_loop() -> None:
+    while True:
+        try:
+            watchdog()
+        except Exception:
+            log.exception("Watchdog failed")
+        time.sleep(60)
+
+
+def kick() -> None:
+    """Start a Kaggle notebook if jobs are waiting and no worker is running."""
+    if settings.RUNNER != "kaggle" or not _kick_lock.acquire(blocking=False):
+        return
+    try:
+        _kick()
+    finally:
+        _kick_lock.release()
+
+
+def _kick() -> None:
+    waiting = _queued()
+    if not waiting:
+        return
+    state = worker_status()
+    now = _now()
+    last_push = float(state.get("last_push") or 0)
+    last_seen = float(state.get("last_seen") or 0)
+    last_exit = float(state.get("last_exit") or 0)
+    if now - last_seen < WORKER_SEEN_S and last_exit < last_seen:
+        return  # a worker is running and will pick the job up
+    if state.get("last_push_error"):
+        if now - last_push < PUSH_RETRY_S:
+            return
+    elif now - last_push < settings.KAGGLE_BOOT_S and last_exit < last_push:
+        return  # the notebook we started is still booting
+    if now - float(state.get("no_gpu_at") or 0) < NO_GPU_RETRY_S:
+        for row in waiting:
+            upsert_match({"match_id": row["match_id"],
+                          "message": "Free GPU hours are used up for now. It will start when they reset."})
+        return
+
+    from app.kaggle_launcher import launch
+
+    run_id = uuid.uuid4().hex[:8]
+    try:
+        launch(run_id)
+    except Exception as exc:
+        log.exception("Could not start the Kaggle notebook")
+        _save_state(last_push=now, last_push_error=str(exc)[:300])
+        for row in waiting:
+            upsert_match({"match_id": row["match_id"],
+                          "message": "Couldn't reach the cloud GPU yet. Retrying in a few minutes..."})
+        return
+    _save_state(last_push=now, last_push_error=None, run_id=run_id)
+    for row in waiting:
+        upsert_match({"match_id": row["match_id"],
+                      "message": "Starting a cloud GPU. This takes a few minutes..."})

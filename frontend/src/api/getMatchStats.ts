@@ -1,5 +1,5 @@
 import type { MatchStats } from "../types/matchStats";
-import { apiFetch, getToken, readError } from "./client";
+import { apiFetch, apiUrl, readError } from "./client";
 
 export interface MatchRecord {
   match_id: string;
@@ -35,31 +35,85 @@ export interface UploadResult {
   bytes: number;
 }
 
-// using XHR because fetch can't show upload progress (videos are big)
-export function uploadMatchVideo(file: File, onProgress?: (fraction: number) => void): Promise<UploadResult> {
+interface UploadPlan {
+  match_id: string;
+  upload_id: string;
+  part_size: number;
+  urls: string[];
+}
+
+const PARALLEL_PARTS = 3;
+const PART_TRIES = 4;
+
+// One part straight to storage. XHR because fetch can't report upload progress.
+function putPart(url: string, blob: Blob, onBytes: (sent: number) => void): Promise<string> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/matches/upload");
-    const token = getToken();
-    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onProgress?.(e.loaded / e.total);
-    };
+    xhr.open("PUT", apiUrl(url));
+    xhr.upload.onprogress = (e) => onBytes(e.loaded);
     xhr.onload = () => {
-      let data: { detail?: unknown } & Partial<UploadResult> = {};
-      try {
-        data = JSON.parse(xhr.responseText);
-      } catch {
-        /* non-JSON error body */
-      }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data as UploadResult);
-      else reject(new Error(typeof data.detail === "string" ? data.detail : "Upload failed"));
+      const etag = xhr.getResponseHeader("ETag");
+      if (xhr.status >= 200 && xhr.status < 300 && etag) resolve(etag);
+      else reject(new Error(etag ? `Upload failed (${xhr.status})` : "Upload blocked: storage didn't return an ETag"));
     };
-    xhr.onerror = () => reject(new Error("Upload failed: the server could not be reached"));
-    const body = new FormData();
-    body.append("file", file);
-    xhr.send(body);
+    xhr.onerror = () => reject(new Error("Upload failed: network error"));
+    xhr.send(blob);
   });
+}
+
+// The video goes to storage in parts (a few in parallel, each retried), so a
+// dropped connection only costs one part and the API never handles the bytes.
+export async function uploadMatchVideo(file: File, onProgress?: (fraction: number) => void): Promise<UploadResult> {
+  const start = await apiFetch("/api/matches/uploads", {
+    method: "POST",
+    body: JSON.stringify({ filename: file.name, size: file.size }),
+  });
+  if (!start.ok) throw new Error(await readError(start, "Could not start the upload"));
+  const plan = (await start.json()) as UploadPlan;
+
+  const sent = new Array<number>(plan.urls.length).fill(0);
+  const report = () => onProgress?.(Math.min(sent.reduce((a, b) => a + b, 0) / file.size, 1));
+  const etags: { number: number; etag: string }[] = [];
+  let next = 0;
+
+  async function uploadPart(index: number) {
+    const blob = file.slice(index * plan.part_size, (index + 1) * plan.part_size);
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const etag = await putPart(plan.urls[index], blob, (bytes) => {
+          sent[index] = bytes;
+          report();
+        });
+        sent[index] = blob.size;
+        report();
+        etags.push({ number: index + 1, etag });
+        return;
+      } catch (err) {
+        sent[index] = 0;
+        report();
+        if (attempt >= PART_TRIES) throw err;
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
+    }
+  }
+
+  async function lane() {
+    while (next < plan.urls.length) await uploadPart(next++);
+  }
+
+  try {
+    await Promise.all(Array.from({ length: Math.min(PARALLEL_PARTS, plan.urls.length) }, lane));
+  } catch (err) {
+    apiFetch(`/api/matches/${plan.match_id}/upload/abort`, { method: "POST" }).catch(() => undefined);
+    throw err;
+  }
+
+  const done = await apiFetch(`/api/matches/${plan.match_id}/upload/complete`, {
+    method: "POST",
+    body: JSON.stringify({ upload_id: plan.upload_id, parts: etags }),
+  });
+  if (!done.ok) throw new Error(await readError(done, "Upload failed"));
+  return done.json() as Promise<UploadResult>;
 }
 
 export async function startAnalysis(

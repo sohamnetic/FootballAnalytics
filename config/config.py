@@ -173,8 +173,10 @@ ANALYSIS_FPS = int(os.environ.get("FA_ANALYSIS_FPS", "30"))  # 0 = never convert
 
 # Analysis video shown on the dashboard, needs ffmpeg
 FFMPEG_BIN = os.environ.get("FA_FFMPEG", "").strip() or None
-ANALYSIS_VIDEO_WIDTH = 1280
-ANALYSIS_VIDEO_CRF = 24
+# the cloud worker uses 960 / 28 (about a third of the size) because free
+# storage limits downloads per day
+ANALYSIS_VIDEO_WIDTH = int(os.environ.get("FA_ANALYSIS_VIDEO_WIDTH", "1280"))
+ANALYSIS_VIDEO_CRF = int(os.environ.get("FA_ANALYSIS_VIDEO_CRF", "24"))
 ANALYSIS_VIDEO_PRESET = "veryfast"
 # old per-step debug videos, big and browsers can't play them. FA_DEBUG_VIDEOS=1 to turn on
 WRITE_DEBUG_VIDEOS = os.environ.get("FA_DEBUG_VIDEOS", "").strip() == "1"
