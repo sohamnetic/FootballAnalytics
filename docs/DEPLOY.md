@@ -127,3 +127,4 @@ Nothing changes: `FA_STORAGE` and `FA_RUNNER` default to `local`, files stay und
 | `FA_KAGGLE_BOOT_S` | 1200 | time a new notebook gets to check in |
 | `FA_ALLOWED_ORIGIN_REGEX` | | e.g. `https://tactivision-.*\.vercel\.app` for preview deploys |
 | `FA_GIT_REF` | Render commit | code the worker runs |
+| `FA_FOOTAGE_CHECK` | 1 | 0 skips the quick "is this football?" check (about 20 frames need green turf with players on it) |

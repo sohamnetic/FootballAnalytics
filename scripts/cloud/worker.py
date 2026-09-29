@@ -229,7 +229,7 @@ def run_job(job: dict) -> None:
             upload(match_id, "log", result.log_path, "text/plain")
             if not result.ok:
                 call(f"/api/worker/jobs/{match_id}/fail",
-                     {"message": "We couldn't complete analysis for this match.",
+                     {"message": result.message or "We couldn't complete analysis for this match.",
                       "log_tail": log_tail(result.log_path)})
                 return
             beat.send("Saving results", 99)

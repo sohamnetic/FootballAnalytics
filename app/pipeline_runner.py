@@ -16,7 +16,7 @@ from typing import Callable
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 STAGE_PROGRESS = [
-    ("Preparing video", 5, ("Converting video", "Football Analytics - Player Tracking", "Selected device")),
+    ("Preparing video", 5, ("Checking footage", "Converting video", "Football Analytics - Player Tracking", "Selected device")),
     ("Detecting players", 12, ("Loading YOLO model", "Model loaded")),
     ("Tracking players", 20, ("Running tracking", "Ball detector loaded", "Processed ")),
     ("Detecting ball", 40, ("Tracking Finished", "Ball rows logged")),
@@ -31,12 +31,15 @@ STAGE_PROGRESS = [
 ]
 
 TRACKING_START, TRACKING_END = 20, 40
+FAILED_MARK = "FOOTAGE_CHECK_FAILED:"
 
 
 @dataclass
 class PipelineResult:
     ok: bool
     log_path: Path
+    # set when the pipeline says why it stopped (e.g. not a football video)
+    message: str = ""
     stats_path: Path | None = None
     analysis_video: Path | None = None
     summary: dict = field(default_factory=dict)
@@ -101,6 +104,7 @@ def run_pipeline(
     )
     lines: list[str] = []
     total_frames = None
+    reason = ""
     last = None
     assert proc.stdout is not None
     for raw in proc.stdout:
@@ -109,6 +113,8 @@ def run_pipeline(
         if len(lines) > 2000:
             del lines[:1000]
         log(line)
+        if line.startswith(FAILED_MARK):
+            reason = line[len(FAILED_MARK):].strip()
         if line.startswith("Frames to process"):
             try:
                 total_frames = int(line.split(":")[1])
@@ -124,7 +130,7 @@ def run_pipeline(
     log_path = out_dir / "pipeline.log"
     log_path.write_text("\n".join(lines[-600:]), encoding="utf-8")
     if code != 0:
-        return PipelineResult(ok=False, log_path=log_path)
+        return PipelineResult(ok=False, log_path=log_path, message=reason)
 
     stats = _finalize_stats(out_dir, job)
     if stats is None:

@@ -9,6 +9,8 @@ import argparse
 import csv
 import json
 import math
+import os
+import sys
 from pathlib import Path
 
 import cv2
@@ -35,10 +37,14 @@ from scripts.analytics.heatmap import HeatmapEngine
 from scripts.analytics.motion_engine import MotionEngine
 from scripts.track import camera_summary_path, run_tracking
 from scripts.analytics.analysis_video import render_analysis_video
+from scripts.pipeline.footage_check import check_footage
 from scripts.pipeline.prepare_video import prepare_video
 from scripts.vision.goals import goals_path
 from scripts.vision.team_assigner import bgr_hex, team_kit_colors
 from scripts.vision.team_assigner import run_team_assignment
+
+# FA_FOOTAGE_CHECK=0 skips the "is this football?" check
+FOOTAGE_CHECK = os.environ.get("FA_FOOTAGE_CHECK", "1").strip() != "0"
 
 ANALYTICS_DIR = OUTPUT_DIR / "analytics"
 ANALYTICS_CSV = ANALYTICS_DIR / "player_analytics.csv"
@@ -268,6 +274,14 @@ def run_mvp(
     source_file = csv_path.with_name(f"{csv_path.stem}_source.json")
 
     if force_track or not csv_path.exists():
+        # stop early on videos that aren't football (a movie clip, a phone video...)
+        if FOOTAGE_CHECK:
+            print("Checking footage...")
+            ok, message, details = check_footage(video_path, start_time, duration)
+            print(f"Footage check          : {details}")
+            if not ok:
+                print(f"FOOTAGE_CHECK_FAILED: {message}")
+                sys.exit(3)
         # 60 fps videos get converted to 30 fps first (only the part we analyse)
         suffix = paths.get("passes_suffix", "")
         prepared = OUTPUT_DIR / "video" / f"analysis_{ANALYSIS_FPS}fps{'_' + suffix if suffix else ''}.mp4"
