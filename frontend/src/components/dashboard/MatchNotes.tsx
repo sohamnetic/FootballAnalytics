@@ -1,5 +1,4 @@
-import { Accordion } from "radix-ui";
-import { ChevronDown, ListChecks, Waypoints } from "lucide-react";
+import { ListChecks, Waypoints } from "lucide-react";
 import { playerLabel } from "../../lib/format";
 import { teamLabel, useTeamNames } from "../../lib/teamNames";
 import type { MatchStats, TimelineEvent } from "../../types/matchStats";
@@ -44,11 +43,9 @@ export function DataNotes({ stats }: { stats: MatchStats }) {
     ["Confirmed possession", q.possession_confirmed_seconds !== undefined ? `${q.possession_confirmed_seconds.toFixed(1)}s` : "–"],
     ["Pipeline", stats.pipeline_version ?? "–"],
   ];
-  const notes = stats.known_limitations ?? [];
-
   return (
     <Card className="h-full">
-      <CardHeader icon={<ListChecks />} title="About these numbers" description="What the footage can and can't tell us." />
+      <CardHeader icon={<ListChecks />} title="About these numbers" description="How much of the match we could read." />
       <CardBody>
         <dl className="grid grid-cols-2 gap-3">
           {facts.map(([k, v]) => (
@@ -58,28 +55,6 @@ export function DataNotes({ stats }: { stats: MatchStats }) {
             </div>
           ))}
         </dl>
-        {notes.length ? (
-          <Accordion.Root type="single" collapsible defaultValue="notes" className="mt-4">
-            <Accordion.Item value="notes" className="rounded-xl border border-white/[0.06]">
-              <Accordion.Header>
-                <Accordion.Trigger className="group flex w-full cursor-pointer items-center justify-between px-4 py-3 text-left text-sm text-zinc-300 hover:text-white">
-                  Method notes ({notes.length})
-                  <ChevronDown className="size-4 transition-transform duration-200 group-data-[state=open]:rotate-180" />
-                </Accordion.Trigger>
-              </Accordion.Header>
-              <Accordion.Content className="overflow-hidden">
-                <ul className="space-y-2.5 px-4 pb-4 text-[13px] leading-relaxed text-zinc-400">
-                  {notes.map((n) => (
-                    <li key={n} className="flex gap-2.5">
-                      <span className="mt-2 size-1 shrink-0 rounded-full bg-zinc-600" />
-                      {n}
-                    </li>
-                  ))}
-                </ul>
-              </Accordion.Content>
-            </Accordion.Item>
-          </Accordion.Root>
-        ) : null}
       </CardBody>
     </Card>
   );
