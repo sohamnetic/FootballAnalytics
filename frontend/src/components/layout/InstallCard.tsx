@@ -1,8 +1,8 @@
-import { Download, Share, X } from "lucide-react";
+import { Download, X } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
 import { useInstall } from "../../lib/install";
 import { Button } from "../ui/Button";
+import { InstallGuide } from "./InstallGuide";
 
 const DISMISSED_KEY = "fa_install_dismissed";
 
@@ -18,7 +18,7 @@ function wasDismissed() {
 export function InstallCard() {
   const install = useInstall();
   const [hidden, setHidden] = useState(wasDismissed);
-  if (hidden || !(install.canPrompt || install.iosHint)) return null;
+  if (hidden || install.standalone) return null;
 
   function dismiss() {
     setHidden(true);
@@ -34,26 +34,15 @@ export function InstallCard() {
       <img src="/icons/icon-192.png" alt="" className="size-11 shrink-0 rounded-xl" />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-white">Install TactiVision</p>
-        <p className="text-[12px] leading-snug text-zinc-400">
-          {install.canPrompt ? (
-            "Open it from your home screen like an app."
-          ) : (
-            <>
-              Tap <Share className="inline size-3.5 align-[-2px]" /> Share, then "Add to Home Screen".
-            </>
-          )}
-        </p>
+        <p className="text-[12px] leading-snug text-zinc-400">Open it from your home screen like an app.</p>
       </div>
-      {install.canPrompt ? (
-        <Button
-          size="sm"
-          onClick={async () => {
-            if (await install.install()) toast.success("Added to your home screen");
-          }}
-        >
-          <Download /> Install
-        </Button>
-      ) : null}
+      <InstallGuide
+        trigger={
+          <Button size="sm">
+            <Download /> Install
+          </Button>
+        }
+      />
       <Button variant="ghost" size="icon" aria-label="Dismiss" onClick={dismiss} className="size-8">
         <X />
       </Button>

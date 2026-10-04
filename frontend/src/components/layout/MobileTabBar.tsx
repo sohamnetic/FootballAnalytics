@@ -1,12 +1,12 @@
 import { Dialog } from "radix-ui";
-import { Download, FolderOpen, LogOut, Plus, Share, User } from "lucide-react";
+import { Download, FolderOpen, LogOut, Plus, User } from "lucide-react";
 import { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { toast } from "sonner";
 import { useAuth } from "../../auth/AuthContext";
 import { cn } from "../../lib/cn";
 import { useInstall } from "../../lib/install";
 import { Button } from "../ui/Button";
+import { InstallGuide } from "./InstallGuide";
 import { initials } from "./SiteHeader";
 
 const tab = ({ isActive }: { isActive: boolean }) =>
@@ -54,10 +54,6 @@ function AccountTab() {
   const install = useInstall();
   const name = user ? user.name || user.email : "";
 
-  async function onInstall() {
-    if (await install.install()) toast.success("TactiVision added to your home screen");
-  }
-
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger className={tab({ isActive: open })}>
@@ -81,15 +77,14 @@ function AccountTab() {
           </div>
 
           <div className="mt-5 flex flex-col gap-2">
-            {install.canPrompt ? (
-              <Button variant="secondary" className="justify-start" onClick={onInstall}>
-                <Download /> Install app
-              </Button>
-            ) : install.iosHint ? (
-              <p className="flex items-start gap-2 rounded-xl bg-white/[0.04] px-3 py-2.5 text-[13px] text-zinc-300">
-                <Share className="mt-0.5 size-4 shrink-0 text-pitch-300" />
-                To install, tap Share in Safari, then "Add to Home Screen".
-              </p>
+            {!install.standalone ? (
+              <InstallGuide
+                trigger={
+                  <Button variant="secondary" className="justify-start">
+                    <Download /> Install app
+                  </Button>
+                }
+              />
             ) : null}
             <Button
               variant="secondary"

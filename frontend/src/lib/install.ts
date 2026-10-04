@@ -36,8 +36,31 @@ export function isIOS(): boolean {
   return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 }
 
-/** canPrompt: Chrome/Android can show its install dialog. iosHint: on iPhone
- * the only way is Share > Add to Home Screen, so we explain that instead. */
+export type Browser =
+  | "ios-safari"
+  | "ios-other"
+  | "android-chrome"
+  | "android-samsung"
+  | "android-firefox"
+  | "desktop-chromium"
+  | "other";
+
+/** Which install steps to show. */
+export function detectBrowser(): Browser {
+  if (typeof navigator === "undefined") return "other";
+  const ua = navigator.userAgent;
+  if (isIOS()) return /CriOS|FxiOS|EdgiOS|OPiOS/i.test(ua) ? "ios-other" : "ios-safari";
+  if (/Android/i.test(ua)) {
+    if (/SamsungBrowser/i.test(ua)) return "android-samsung";
+    if (/Firefox/i.test(ua)) return "android-firefox";
+    return "android-chrome";
+  }
+  if (/Edg\/|Chrome\//.test(ua) && !/OPR\//.test(ua)) return "desktop-chromium";
+  return "other";
+}
+
+/** canPrompt: the browser can show its own install dialog (Chrome/Edge).
+ * Elsewhere (iPhone, Samsung...) InstallGuide explains the manual steps. */
 export function useInstall() {
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -51,7 +74,6 @@ export function useInstall() {
   return {
     standalone,
     canPrompt: !standalone && deferred !== null,
-    iosHint: !standalone && isIOS(),
     async install() {
       if (!deferred) return false;
       await deferred.prompt();
