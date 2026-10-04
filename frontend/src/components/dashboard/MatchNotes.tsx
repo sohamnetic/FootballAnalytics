@@ -1,11 +1,13 @@
 import { ListChecks, Waypoints } from "lucide-react";
 import { playerLabel } from "../../lib/format";
+import { usePlayerNames } from "../../lib/playerNames";
 import { teamLabel, useTeamNames } from "../../lib/teamNames";
 import type { MatchStats, TimelineEvent } from "../../types/matchStats";
 import { Card, CardBody, CardHeader } from "../ui/Card";
 
 export function TimelineCard({ events }: { events?: TimelineEvent[] }) {
   const names = useTeamNames();
+  const { names: playerNames } = usePlayerNames();
   const has = Array.isArray(events) && events.length > 0;
   return (
     <Card className="h-full">
@@ -19,7 +21,7 @@ export function TimelineCard({ events }: { events?: TimelineEvent[] }) {
                 <span className="font-mono text-[12px] text-zinc-500 tabular">{e.time_s ?? "–"}s</span>
                 <p className="text-white">
                   {e.type.toLowerCase()} · {e.team_id ? teamLabel(e.team_id, names) : "–"}
-                  {e.stable_id !== null && e.stable_id !== undefined ? ` · ${playerLabel(e.stable_id)}` : ""}
+                  {e.stable_id !== null && e.stable_id !== undefined ? ` · ${playerLabel(e.stable_id, playerNames)}` : ""}
                 </p>
               </li>
             ))}
@@ -44,7 +46,7 @@ export function DataNotes({ stats }: { stats: MatchStats }) {
     ["Pipeline", stats.pipeline_version ?? "–"],
   ];
   return (
-    <Card className="h-full">
+    <Card className="flex-1">
       <CardHeader icon={<ListChecks />} title="About these numbers" description="How much of the match we could read." />
       <CardBody>
         <dl className="grid grid-cols-2 gap-3">

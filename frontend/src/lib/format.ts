@@ -22,8 +22,14 @@ export function videoLabel(path: string | undefined): string {
   return parts[parts.length - 1] || normalized;
 }
 
-export function playerLabel(stableId: number): string {
-  return `Player ${stableId}`;
+export function playerLabel(stableId: number, names?: Record<string, string>): string {
+  return names?.[String(stableId)] || `Player ${stableId}`;
+}
+
+export function formatClock(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return "—";
+  const s = Math.round(seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
 export function boolLabel(value: boolean | null | undefined): string {

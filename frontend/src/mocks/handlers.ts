@@ -18,6 +18,7 @@ type Row = {
   goals_a?: number;
   goals_b?: number;
   started?: number;
+  player_names?: Record<string, string>;
 };
 
 const USER = { id: "demo", email: "demo@tactivision.local", name: "Demo Coach" };
@@ -115,6 +116,19 @@ export const handlers = [
   http.get("/api/matches/:id", ({ params }) => {
     const row = find(params.id);
     return row ? HttpResponse.json(row) : HttpResponse.json({ detail: "Match not found" }, { status: 404 });
+  }),
+
+  http.put("/api/matches/:id/player-names", async ({ params, request }) => {
+    const row = find(params.id);
+    if (!row) return HttpResponse.json({ detail: "Match not found" }, { status: 404 });
+    const body = (await request.json()) as { names: Record<string, string> };
+    const names = { ...(row.player_names ?? {}) };
+    for (const [sid, name] of Object.entries(body.names)) {
+      if (name.trim()) names[sid] = name.trim();
+      else delete names[sid];
+    }
+    row.player_names = names;
+    return HttpResponse.json({ player_names: names });
   }),
 
   http.delete("/api/matches/:id", async ({ params }) => {

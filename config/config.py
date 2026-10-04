@@ -169,6 +169,32 @@ GOAL_FREE_BALL_MARGIN = 0.25    # no player right next to the ball in the net
 GOAL_MIN_INSIDE_S = 0.3
 GOAL_VANISH_S = 1.0             # ball disappears in the net for this long
 
+# Player ratings (scripts/analytics/player_rating.py), 0-10 like SofaScore.
+# Everyone starts at RATING_BASE.
+# Big moments add rating points directly, however long the match is:
+RATING_EVENT_POINTS = {
+    "goal": 1.00,
+    "shot_on_target": 0.30,     # on target or saved
+    "shot_off_target": 0.10,    # blocked or wide
+    "save": 0.40,               # goalkeeper stops a shot
+}
+# Everyday actions are scaled to "per 10 minutes on screen" (plus
+# RATING_SHRINK_MIN so short appearances don't swing wildly), then by RATING_SCALE:
+RATING_RATE_POINTS = {
+    "pass": 0.06,               # completed
+    "pass_received": 0.03,
+    "interception": 0.25,
+    "recovery": 0.20,
+    "ball_lost": -0.20,         # intercepted from this player
+}
+RATING_ON_BALL_PER_S = 0.01     # time on the ball, also per 10 minutes
+RATING_ON_BALL_MAX = 0.40
+RATING_BASE = 6.0
+RATING_SCALE = 0.75
+RATING_SHRINK_MIN = 3.0
+RATING_MIN_VISIBLE_S = 120      # seen for less = low confidence
+# checked on the 5-min match and the 10:00-15:00 window: median 6.4-6.7, best ~7.5
+
 # videos above this frame rate are converted down to it before analysis
 ANALYSIS_FPS = int(os.environ.get("FA_ANALYSIS_FPS", "30"))  # 0 = never convert
 

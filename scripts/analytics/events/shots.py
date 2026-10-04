@@ -55,7 +55,7 @@ ANALYTICS_DIR = OUTPUT_DIR / "analytics"
 SHOT_FIELDS = [
     "event_id", "frame", "time_s", "shooter_stable_id", "team_id", "target_goal",
     "ball_start_x", "ball_start_y", "start_distance_gh", "speed_bh_s", "min_distance_gh",
-    "confidence", "on_target", "goal", "outcome",
+    "confidence", "on_target", "goal", "outcome", "stopped_by_stable_id",
 ]
 VALIDATION_FIELDS = [
     "frame", "time_s", "shooter", "team", "accepted", "on_target", "goal", "outcome", "reason",
@@ -368,6 +368,8 @@ def classify_shot(interval, nxt, teams, scene, feet, last_frame, timing):
     out.update(
         accepted=True, on_target=bool(on_target), goal=bool(scored), outcome=outcome, reason=outcome,
         confidence=confidence, target=flight["target"], ball_start=(start["x"], start["y"]),
+        # the opponent who got the ball first (keeper save or block), for ratings
+        stopped_by=nxt["stable_id"] if stopped_by_opponent and not scored else "",
     )
     return out
 
@@ -414,6 +416,7 @@ def detect_shots(frame_state_csv, teams_csv, fps, goals_csv, coordinate_csv=None
             "on_target": r["on_target"],
             "goal": r["goal"],
             "outcome": r["outcome"],
+            "stopped_by_stable_id": r.get("stopped_by", ""),
         })
         counts["confirmed_shots"] += 1
         counts["shots_on_target"] += int(r["on_target"])

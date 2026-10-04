@@ -40,6 +40,23 @@ export interface PlayerStats {
   interceptions: number;
   ball_recoveries: number;
   ball_possession_time_seconds: number;
+  // 0-10 rating; missing on matches analysed before ratings existed
+  rating?: number;
+  rating_confidence?: "normal" | "low";
+  rating_breakdown?: RatingItem[];
+  visible_seconds?: number;
+  passes_received?: number;
+  ball_losses?: number;
+  saves?: number;
+  is_goalkeeper?: boolean;
+}
+
+export interface RatingItem {
+  key: string;
+  label: string;
+  count: number;
+  // rating points this added (negative = took away)
+  points: number;
 }
 
 export interface EventSummary {
@@ -88,6 +105,7 @@ export interface MatchStats {
     team_b: TeamStats;
   };
   players: PlayerStats[];
+  player_of_the_match?: number | null;
   known_limitations?: string[];
   inconsistencies?: string[];
   events?: TimelineEvent[];

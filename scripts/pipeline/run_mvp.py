@@ -409,6 +409,7 @@ def run_mvp(
             shots_measured=shots_measured,
             camera_motion=camera_motion,
             kit_colors={team: bgr_hex(c) for team, c in kit_colors.items()} if kit_colors else None,
+            coordinate_csv=csv_path,
         )
 
     analysis_video = None

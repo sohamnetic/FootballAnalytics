@@ -1,10 +1,12 @@
 import { ArrowDown, Users } from "lucide-react";
 import { useMemo, useState } from "react";
 import { cn } from "../../lib/cn";
-import { displayPercent } from "../../lib/format";
+import { displayPercent, playerLabel } from "../../lib/format";
+import { usePlayerNames } from "../../lib/playerNames";
 import { teamLabel, useTeamNames } from "../../lib/teamNames";
 import type { PlayerStats } from "../../types/matchStats";
 import { Card, CardHeader } from "../ui/Card";
+import { RatingBadge } from "./RatingBadge";
 
 type Filter = "all" | "team_a" | "team_b";
 type Col = { key: keyof PlayerStats; label: string; kind?: "percent" };
@@ -19,10 +21,12 @@ const COLS: Col[] = [
   { key: "ball_recoveries", label: "Recoveries" },
 ];
 
-export function PlayersTable({ players }: { players: PlayerStats[] }) {
+export function PlayersTable({ players, onSelect }: { players: PlayerStats[]; onSelect?: (p: PlayerStats) => void }) {
   const names = useTeamNames();
+  const { names: playerNames } = usePlayerNames();
+  const rated = players.some((p) => p.rating !== undefined);
   const [filter, setFilter] = useState<Filter>("all");
-  const [sort, setSort] = useState<keyof PlayerStats>("ball_possession_time_seconds");
+  const [sort, setSort] = useState<keyof PlayerStats>(rated ? "rating" : "ball_possession_time_seconds");
 
   const onTeam = useMemo(() => players.filter((p) => p.team_id === "team_a" || p.team_id === "team_b"), [players]);
   const maxPoss = Math.max(...onTeam.map((p) => p.ball_possession_time_seconds), 0.001);
@@ -56,7 +60,7 @@ export function PlayersTable({ players }: { players: PlayerStats[] }) {
       <CardHeader
         icon={<Users />}
         title="Players"
-        description={`${onTeam.length} players identified. Click a column to sort.`}
+        description={`${onTeam.length} players identified. Click a player for details, or a column to sort.`}
         action={
           <div className="flex rounded-lg bg-white/[0.05] p-0.5 text-[12px]" role="group" aria-label="Filter by team">
             {(["all", "team_a", "team_b"] as Filter[]).map((id) => (
@@ -83,6 +87,7 @@ export function PlayersTable({ players }: { players: PlayerStats[] }) {
               <th scope="col" className="px-5 py-3 text-left font-medium text-zinc-500 sm:px-6">
                 Player
               </th>
+              {rated ? header("rating", "Rating", "left") : null}
               {header("ball_possession_time_seconds", "Possession", "left")}
               {COLS.map((c) => header(c.key, c.label))}
             </tr>
@@ -91,7 +96,11 @@ export function PlayersTable({ players }: { players: PlayerStats[] }) {
             {rows.map((p) => {
               const a = p.team_id === "team_a";
               return (
-                <tr key={p.stable_id} className="transition-colors hover:bg-white/[0.03]">
+                <tr
+                  key={p.stable_id}
+                  onClick={() => onSelect?.(p)}
+                  className={cn("transition-colors hover:bg-white/[0.03]", onSelect && "cursor-pointer")}
+                >
                   <td className="px-5 py-3 sm:px-6">
                     <div className="flex items-center gap-3">
                       <span
@@ -103,11 +112,25 @@ export function PlayersTable({ players }: { players: PlayerStats[] }) {
                         {p.stable_id}
                       </span>
                       <div className="min-w-0">
-                        <p className="font-medium text-white">Player {p.stable_id}</p>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelect?.(p);
+                          }}
+                          className="block max-w-40 cursor-pointer truncate text-left font-medium text-white hover:text-pitch-200"
+                        >
+                          {playerLabel(p.stable_id, playerNames)}
+                        </button>
                         <p className="max-w-36 truncate text-[12px] text-zinc-500">{teamLabel(p.team_id, names)}</p>
                       </div>
                     </div>
                   </td>
+                  {rated ? (
+                    <td className="px-3 py-3">
+                      <RatingBadge rating={p.rating} low={p.rating_confidence === "low"} />
+                    </td>
+                  ) : null}
                   <td className="px-3 py-3">
                     <div className="flex items-center gap-3">
                       <div className="h-1.5 w-20 overflow-hidden rounded-full bg-white/[0.05]">
@@ -142,7 +165,7 @@ export function PlayersTable({ players }: { players: PlayerStats[] }) {
         </table>
       </div>
       <p className="px-5 py-4 text-[12px] text-zinc-500 sm:px-6">
-        Player numbers are TactiVision IDs, not shirt numbers.
+        Player numbers are TactiVision IDs, not shirt numbers. Faded ratings: seen for under 2 minutes.
       </p>
     </Card>
   );

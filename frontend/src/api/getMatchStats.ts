@@ -18,6 +18,19 @@ export interface MatchRecord {
   message?: string;
   analysis?: string;
   start_time_s?: number | null;
+  player_names?: Record<string, string>;
+}
+
+export async function savePlayerNames(matchId: string, names: Record<string, string>): Promise<Record<string, string>> {
+  const response = await apiFetch(`/api/matches/${matchId}/player-names`, {
+    method: "PUT",
+    body: JSON.stringify({ names }),
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response, "Could not save the name"));
+  }
+  const data = (await response.json()) as { player_names: Record<string, string> };
+  return data.player_names;
 }
 
 export async function getMatchStats(matchId: string): Promise<MatchStats> {

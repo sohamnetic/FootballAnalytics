@@ -308,6 +308,35 @@ def match_detail(match_id: str, user: dict = Depends(current_user)):
     return _my_match(match_id, user)
 
 
+class PlayerNamesBody(BaseModel):
+    # player id -> name; an empty name removes it
+    names: dict[str, str] = Field(max_length=100)
+
+
+MAX_NAME = 40
+MAX_NAMED_PLAYERS = 100
+
+
+@app.put("/api/matches/{match_id}/player-names")
+def player_names(match_id: str, body: PlayerNamesBody, user: dict = Depends(current_user)):
+    row = _my_match(match_id, user)
+    names = dict(row.get("player_names") or {})
+    for sid, name in body.names.items():
+        if not sid.isdigit():
+            raise HTTPException(status_code=400, detail="Player ids are numbers")
+        name = " ".join(name.split())
+        if len(name) > MAX_NAME:
+            raise HTTPException(status_code=400, detail=f"Names can be up to {MAX_NAME} characters")
+        if name:
+            names[str(int(sid))] = name
+        else:
+            names.pop(str(int(sid)), None)
+    if len(names) > MAX_NAMED_PLAYERS:
+        raise HTTPException(status_code=400, detail="Too many named players")
+    upsert_match({"match_id": match_id, "player_names": names})
+    return {"player_names": names}
+
+
 @app.delete("/api/matches/{match_id}")
 def remove_match(match_id: str, user: dict = Depends(current_user)):
     row = _my_match(match_id, user)

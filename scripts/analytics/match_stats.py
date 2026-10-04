@@ -14,6 +14,7 @@ import pandas as pd
 from config.config import IDENTITY_RESOLVER_ENABLED, OUTPUT_DIR, RAW_VIDEO
 from scripts.analytics.events.timing import EventTiming
 from scripts.analytics.events.passes import VALID_TEAMS, _confirmed_intervals, _load_teams
+from scripts.analytics.player_rating import add_ratings
 
 ANALYTICS_DIR = OUTPUT_DIR / "analytics"
 PIPELINE_VERSION = "mvp-product-data-v1"
@@ -176,6 +177,7 @@ def build_match_stats(
     shots_measured=True,
     camera_motion=None,
     kit_colors=None,
+    coordinate_csv=None,
 ):
     fps = _video_fps(video_path)
     teams = _load_teams(teams_csv)
@@ -303,6 +305,10 @@ def build_match_stats(
                 if key in block:
                     block[key] = None
 
+    player_of_the_match = add_ratings(
+        players, passes_df=passes_df, intercepts_df=intercepts_df, shots_df=shots_df,
+        teams_df=teams_df, coordinate_csv=coordinate_csv, fps=fps,
+    )
     player_list = list(players.values())
 
     identity_ids = None
@@ -371,6 +377,7 @@ def build_match_stats(
         "event_summary": event_summary,
         "teams": team_stats,
         "players": player_list,
+        "player_of_the_match": player_of_the_match,
         "known_limitations": limitations,
         "inconsistencies": inconsistencies,
     }
@@ -542,6 +549,7 @@ def run_match_stats(
     shots_measured=True,
     camera_motion=None,
     kit_colors=None,
+    coordinate_csv=None,
 ):
     ANALYTICS_DIR.mkdir(parents=True, exist_ok=True)
     tag = f"_{suffix}" if suffix else ""
@@ -559,6 +567,7 @@ def run_match_stats(
         shots_measured=shots_measured,
         camera_motion=camera_motion,
         kit_colors=kit_colors,
+        coordinate_csv=coordinate_csv,
     )
     json_path = ANALYTICS_DIR / f"match_stats{tag}.json"
     csv_path = ANALYTICS_DIR / f"match_stats{tag}.csv"

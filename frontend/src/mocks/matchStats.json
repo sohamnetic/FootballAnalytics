@@ -1,267 +1,1006 @@
 {
- "match": {
-  "video": "sunday_league_final.mp4",
-  "start_time_s": 200.0,
-  "duration_s": 40.0,
-  "fps": 59.9401,
-  "clip_duration_used_s": 40.0,
-  "team_a_name": "Red Lions",
-  "team_b_name": "Mint FC",
-  "match_id": "demo-0001"
- },
- "generated_at": "2026-09-23T05:29:01.055091+00:00",
- "pipeline_version": "mvp-product-data-v1",
- "identity_quality": "RESOLVED_ESTIMATE",
- "data_quality": {
-  "stable_ids": 13,
-  "identity_audit_stable_ids": null,
-  "valid_team_players": 13,
-  "team_assignment_counts": {
-   "team_a": 8,
-   "team_b": 5
+  "match": {
+    "video": "sunday_league_final.mp4",
+    "start_time_s": 0.0,
+    "duration_s": 300.3,
+    "fps": 30.0,
+    "clip_duration_used_s": 300.3,
+    "kit_colors": {
+      "team_a": "#eb593c",
+      "team_b": "#3ceb93"
+    }
   },
-  "estimated_visible_players": "~10-16",
-  "identity_fragmentation": false,
-  "team_assignment_uncertainty": true,
-  "goal_geometry_manual": true,
-  "pass_attempts_available": false,
-  "possession_basis": "share_of_confirmed_team_possession",
-  "possession_confirmed_seconds": 10.4938,
-  "possession_unknown_or_unassigned_seconds": 0.0,
-  "possession_state_frames": {
-   "candidate": 376,
-   "confirmed": 629,
-   "loose": 1257,
-   "unknown": 135
+  "generated_at": "2026-10-04T17:01:31.840625+00:00",
+  "pipeline_version": "mvp-product-data-v1",
+  "identity_quality": "RESOLVED_ESTIMATE",
+  "data_quality": {
+    "stable_ids": 27,
+    "identity_audit_stable_ids": null,
+    "valid_team_players": 19,
+    "team_assignment_counts": {
+      "team_b": 10,
+      "team_a": 9,
+      "referee": 5,
+      "unknown": 3
+    },
+    "estimated_visible_players": "~10-16",
+    "identity_fragmentation": false,
+    "team_assignment_uncertainty": true,
+    "goal_geometry_manual": true,
+    "shots_goals_measured": true,
+    "camera_motion": null,
+    "pass_attempts_available": false,
+    "possession_basis": "share_of_confirmed_team_possession",
+    "possession_confirmed_seconds": 75.3667,
+    "possession_unknown_or_unassigned_seconds": 6.7667,
+    "possession_state_frames": {
+      "unknown": 1732,
+      "candidate": 638,
+      "confirmed": 2261,
+      "loose": 4378
+    }
   },
-  "shots_goals_measured": false
- },
- "event_summary": {
-  "possession_intervals": 41,
-  "possession_transitions": 40,
-  "completed_passes": 0,
-  "interceptions": 3,
-  "recoveries": 0,
-  "shots": null,
-  "shots_on_target": null,
-  "goals": null
- },
- "teams": {
-  "team_a": {
-   "possession_percentage": 59.46,
-   "possession_seconds": 6.2396,
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "completed_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 2,
-   "ball_recoveries": 0
+  "event_summary": {
+    "possession_intervals": 205,
+    "possession_transitions": 204,
+    "completed_passes": 36,
+    "interceptions": 28,
+    "recoveries": 4,
+    "shots": 5,
+    "shots_on_target": 3,
+    "goals": 0
   },
-  "team_b": {
-   "possession_percentage": 40.54,
-   "possession_seconds": 4.2542,
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "completed_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 1,
-   "ball_recoveries": 0
-  }
- },
- "players": [
-  {
-   "stable_id": 1,
-   "team_id": "team_a",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 1,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 1.6183
+  "teams": {
+    "team_a": {
+      "possession_percentage": 54.96,
+      "possession_seconds": 37.7,
+      "goals": 0,
+      "shots": 2,
+      "shots_on_target": 2,
+      "completed_passes": 18,
+      "pass_accuracy": null,
+      "interceptions": 10,
+      "ball_recoveries": 1
+    },
+    "team_b": {
+      "possession_percentage": 45.04,
+      "possession_seconds": 30.9,
+      "goals": 0,
+      "shots": 3,
+      "shots_on_target": 1,
+      "completed_passes": 18,
+      "pass_accuracy": null,
+      "interceptions": 18,
+      "ball_recoveries": 3
+    }
   },
-  {
-   "stable_id": 2,
-   "team_id": "team_a",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 0,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 0.5672
-  },
-  {
-   "stable_id": 3,
-   "team_id": "team_a",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 0,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 0.0334
-  },
-  {
-   "stable_id": 4,
-   "team_id": "team_a",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 0,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 0.0501
-  },
-  {
-   "stable_id": 5,
-   "team_id": "team_a",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 0,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 0.0
-  },
-  {
-   "stable_id": 6,
-   "team_id": "team_a",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 0,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 0.0
-  },
-  {
-   "stable_id": 7,
-   "team_id": "team_a",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 0,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 0.2169
-  },
-  {
-   "stable_id": 8,
-   "team_id": "team_a",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 1,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 3.7538
-  },
-  {
-   "stable_id": 9,
-   "team_id": "team_b",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 0,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 1.5182
-  },
-  {
-   "stable_id": 10,
-   "team_id": "team_b",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 1,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 1.6683
-  },
-  {
-   "stable_id": 11,
-   "team_id": "team_b",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 0,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 0.3003
-  },
-  {
-   "stable_id": 12,
-   "team_id": "team_b",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 0,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 0.7674
-  },
-  {
-   "stable_id": 13,
-   "team_id": "team_b",
-   "goals": null,
-   "shots": null,
-   "shots_on_target": null,
-   "shot_accuracy": null,
-   "shot_conversion_rate": null,
-   "successful_passes": 0,
-   "pass_accuracy": null,
-   "interceptions": 0,
-   "ball_recoveries": 0,
-   "ball_possession_time_seconds": 0.0
-  }
- ],
- "known_limitations": [
-  "Shots and goals are not measured for this video: the camera pans or zooms, and goal positions are only known as fixed camera pixels.",
-  "stable_id is estimated by matching appearance, jersey numbers and movement across tracker gaps; it is not a shirt number, and same-kit players with no readable number can still be confused.",
-  "Team assignment is jersey-colour clustering in camera pixels, not official team sheets.",
-  "Pass accuracy is null: completed passes exist, but attempted-pass is not a defensible MVP definition.",
-  "Shot and goal geometry is manually configured in camera pixels, not metres or homography.",
-  "False-positive goals are suppressed by design; missed shots/goals are expected.",
-  "Interceptions and recoveries are conservative post-process labels, not broadcast events.",
-  "Possession % is each team's share of confirmed team possession and sums to 100%. Loose/unknown time is excluded from that split."
- ]
+  "players": [
+    {
+      "stable_id": 1,
+      "team_id": "team_a",
+      "goals": 0,
+      "shots": 1,
+      "shots_on_target": 1,
+      "shot_accuracy": 100.0,
+      "shot_conversion_rate": 0.0,
+      "successful_passes": 0,
+      "pass_accuracy": null,
+      "interceptions": 1,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 4.5333,
+      "rating": 6.3,
+      "rating_confidence": "normal",
+      "rating_breakdown": [
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 2,
+          "points": -0.44
+        },
+        {
+          "key": "shot_on_target",
+          "label": "Shots on target",
+          "count": 1,
+          "points": 0.3
+        },
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 1,
+          "points": 0.28
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 4,
+          "points": 0.13
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 4.5,
+          "points": 0.05
+        }
+      ],
+      "visible_seconds": 229.0,
+      "passes_received": 4,
+      "ball_losses": 2,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 2,
+      "team_id": "team_a",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 4,
+      "pass_accuracy": null,
+      "interceptions": 2,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 5.3667,
+      "rating": 6.6,
+      "rating_confidence": "normal",
+      "rating_breakdown": [
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 2,
+          "points": 0.55
+        },
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 2,
+          "points": -0.44
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 4,
+          "points": 0.27
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 4,
+          "points": 0.13
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 5.4,
+          "points": 0.06
+        }
+      ],
+      "visible_seconds": 227.0,
+      "passes_received": 4,
+      "ball_losses": 2,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 3,
+      "team_id": "team_a",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 6,
+      "pass_accuracy": null,
+      "interceptions": 1,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 10.4,
+      "rating": 6.2,
+      "rating_confidence": "normal",
+      "rating_breakdown": [
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 3,
+          "points": -0.77
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 6,
+          "points": 0.46
+        },
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 1,
+          "points": 0.32
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 10.4,
+          "points": 0.13
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 2,
+          "points": 0.08
+        }
+      ],
+      "visible_seconds": 168.5,
+      "passes_received": 2,
+      "ball_losses": 3,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 4,
+      "team_id": "team_a",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 1,
+      "pass_accuracy": null,
+      "interceptions": 1,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 0.3667,
+      "rating": 6.4,
+      "rating_confidence": "normal",
+      "rating_breakdown": [
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 1,
+          "points": 0.32
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 1,
+          "points": 0.08
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 0.4,
+          "points": 0.0
+        }
+      ],
+      "visible_seconds": 166.5,
+      "passes_received": 0,
+      "ball_losses": 0,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 5,
+      "team_id": "team_a",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 5,
+      "pass_accuracy": null,
+      "interceptions": 3,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 4.8667,
+      "rating": 6.9,
+      "rating_confidence": "normal",
+      "rating_breakdown": [
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 3,
+          "points": 1.04
+        },
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 3,
+          "points": -0.84
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 5,
+          "points": 0.42
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 4,
+          "points": 0.17
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 4.9,
+          "points": 0.07
+        }
+      ],
+      "visible_seconds": 143.1,
+      "passes_received": 4,
+      "ball_losses": 3,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 6,
+      "team_id": "team_a",
+      "goals": 0,
+      "shots": 1,
+      "shots_on_target": 1,
+      "shot_accuracy": 100.0,
+      "shot_conversion_rate": 0.0,
+      "successful_passes": 0,
+      "pass_accuracy": null,
+      "interceptions": 0,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 6.9333,
+      "rating": 5.7,
+      "rating_confidence": "normal",
+      "rating_breakdown": [
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 3,
+          "points": -0.84
+        },
+        {
+          "key": "shot_on_target",
+          "label": "Shots on target",
+          "count": 1,
+          "points": 0.3
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 3,
+          "points": 0.13
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 6.9,
+          "points": 0.1
+        }
+      ],
+      "visible_seconds": 139.7,
+      "passes_received": 3,
+      "ball_losses": 3,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 7,
+      "team_id": "team_a",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 2,
+      "pass_accuracy": null,
+      "interceptions": 1,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 2.0,
+      "rating": 6.3,
+      "rating_confidence": "low",
+      "rating_breakdown": [
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 1,
+          "points": 0.38
+        },
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 1,
+          "points": -0.31
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 2,
+          "points": 0.18
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 1,
+          "points": 0.05
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 2.0,
+          "points": 0.03
+        }
+      ],
+      "visible_seconds": 112.5,
+      "passes_received": 1,
+      "ball_losses": 1,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 8,
+      "team_id": "team_a",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 0,
+      "pass_accuracy": null,
+      "interceptions": 1,
+      "ball_recoveries": 1,
+      "ball_possession_time_seconds": 3.1333,
+      "rating": 5.8,
+      "rating_confidence": "low",
+      "rating_breakdown": [
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 3,
+          "points": -1.13
+        },
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 1,
+          "points": 0.47
+        },
+        {
+          "key": "recovery",
+          "label": "Recoveries",
+          "count": 1,
+          "points": 0.38
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 3.1,
+          "points": 0.06
+        }
+      ],
+      "visible_seconds": 59.7,
+      "passes_received": 0,
+      "ball_losses": 3,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 9,
+      "team_id": "team_a",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 0,
+      "pass_accuracy": null,
+      "interceptions": 0,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 0.1,
+      "rating": 5.5,
+      "rating_confidence": "low",
+      "rating_breakdown": [
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 1,
+          "points": -0.46
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 0.1,
+          "points": 0.0
+        }
+      ],
+      "visible_seconds": 16.4,
+      "passes_received": 0,
+      "ball_losses": 1,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 17,
+      "team_id": "team_b",
+      "goals": 0,
+      "shots": 1,
+      "shots_on_target": 1,
+      "shot_accuracy": 100.0,
+      "shot_conversion_rate": 0.0,
+      "successful_passes": 4,
+      "pass_accuracy": null,
+      "interceptions": 4,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 17.2333,
+      "rating": 7.4,
+      "rating_confidence": "normal",
+      "rating_breakdown": [
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 4,
+          "points": 1.24
+        },
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 3,
+          "points": -0.75
+        },
+        {
+          "key": "shot_on_target",
+          "label": "Shots on target",
+          "count": 1,
+          "points": 0.3
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 4,
+          "points": 0.3
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 17.2,
+          "points": 0.21
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 3,
+          "points": 0.11
+        }
+      ],
+      "visible_seconds": 181.9,
+      "passes_received": 3,
+      "ball_losses": 3,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 18,
+      "team_id": "team_b",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 3,
+      "pass_accuracy": null,
+      "interceptions": 2,
+      "ball_recoveries": 1,
+      "ball_possession_time_seconds": 2.8667,
+      "rating": 6.8,
+      "rating_confidence": "normal",
+      "rating_breakdown": [
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 2,
+          "points": 0.66
+        },
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 2,
+          "points": -0.53
+        },
+        {
+          "key": "recovery",
+          "label": "Recoveries",
+          "count": 1,
+          "points": 0.26
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 3,
+          "points": 0.24
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 3,
+          "points": 0.12
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 2.9,
+          "points": 0.04
+        }
+      ],
+      "visible_seconds": 161.2,
+      "passes_received": 3,
+      "ball_losses": 2,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 19,
+      "team_id": "team_b",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 2,
+      "pass_accuracy": null,
+      "interceptions": 4,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 2.3333,
+      "rating": 7.1,
+      "rating_confidence": "normal",
+      "rating_breakdown": [
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 4,
+          "points": 1.35
+        },
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 2,
+          "points": -0.54
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 2,
+          "points": 0.16
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 2,
+          "points": 0.08
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 2.3,
+          "points": 0.03
+        }
+      ],
+      "visible_seconds": 152.4,
+      "passes_received": 2,
+      "ball_losses": 2,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 20,
+      "team_id": "team_b",
+      "goals": 0,
+      "shots": 1,
+      "shots_on_target": 0,
+      "shot_accuracy": 0.0,
+      "shot_conversion_rate": 0.0,
+      "successful_passes": 3,
+      "pass_accuracy": null,
+      "interceptions": 2,
+      "ball_recoveries": 1,
+      "ball_possession_time_seconds": 5.1667,
+      "rating": 7.3,
+      "rating_confidence": "normal",
+      "rating_breakdown": [
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 2,
+          "points": 0.69
+        },
+        {
+          "key": "recovery",
+          "label": "Recoveries",
+          "count": 1,
+          "points": 0.27
+        },
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 1,
+          "points": -0.27
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 3,
+          "points": 0.25
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 5,
+          "points": 0.21
+        },
+        {
+          "key": "shot_off_target",
+          "label": "Other shots",
+          "count": 1,
+          "points": 0.1
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 5.2,
+          "points": 0.07
+        }
+      ],
+      "visible_seconds": 148.2,
+      "passes_received": 5,
+      "ball_losses": 1,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 21,
+      "team_id": "team_b",
+      "goals": 0,
+      "shots": 1,
+      "shots_on_target": 0,
+      "shot_accuracy": 0.0,
+      "shot_conversion_rate": 0.0,
+      "successful_passes": 2,
+      "pass_accuracy": null,
+      "interceptions": 3,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 2.2667,
+      "rating": 7.3,
+      "rating_confidence": "low",
+      "rating_breakdown": [
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 3,
+          "points": 1.13
+        },
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 1,
+          "points": -0.3
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 2,
+          "points": 0.18
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 4,
+          "points": 0.18
+        },
+        {
+          "key": "shot_off_target",
+          "label": "Other shots",
+          "count": 1,
+          "points": 0.1
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 2.3,
+          "points": 0.03
+        }
+      ],
+      "visible_seconds": 119.5,
+      "passes_received": 4,
+      "ball_losses": 1,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 22,
+      "team_id": "team_b",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 0,
+      "pass_accuracy": null,
+      "interceptions": 2,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 0.3,
+      "rating": 6.5,
+      "rating_confidence": "low",
+      "rating_breakdown": [
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 2,
+          "points": 0.87
+        },
+        {
+          "key": "ball_lost",
+          "label": "Ball lost",
+          "count": 1,
+          "points": -0.35
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 0.3,
+          "points": 0.01
+        }
+      ],
+      "visible_seconds": 80.0,
+      "passes_received": 0,
+      "ball_losses": 1,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 23,
+      "team_id": "team_b",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 2,
+      "pass_accuracy": null,
+      "interceptions": 0,
+      "ball_recoveries": 1,
+      "ball_possession_time_seconds": 0.3333,
+      "rating": 6.6,
+      "rating_confidence": "low",
+      "rating_breakdown": [
+        {
+          "key": "recovery",
+          "label": "Recoveries",
+          "count": 1,
+          "points": 0.39
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 2,
+          "points": 0.24
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 0.3,
+          "points": 0.01
+        }
+      ],
+      "visible_seconds": 49.3,
+      "passes_received": 0,
+      "ball_losses": 0,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 24,
+      "team_id": "team_b",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 0,
+      "pass_accuracy": null,
+      "interceptions": 0,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 0.0667,
+      "rating": 6.0,
+      "rating_confidence": "low",
+      "rating_breakdown": [
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 0.1,
+          "points": 0.0
+        }
+      ],
+      "visible_seconds": 27.8,
+      "passes_received": 0,
+      "ball_losses": 0,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 25,
+      "team_id": "team_b",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 2,
+      "pass_accuracy": null,
+      "interceptions": 1,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 0.3,
+      "rating": 6.9,
+      "rating_confidence": "low",
+      "rating_breakdown": [
+        {
+          "key": "interception",
+          "label": "Interceptions",
+          "count": 1,
+          "points": 0.57
+        },
+        {
+          "key": "pass",
+          "label": "Passes",
+          "count": 2,
+          "points": 0.28
+        },
+        {
+          "key": "pass_received",
+          "label": "Passes received",
+          "count": 1,
+          "points": 0.07
+        },
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 0.3,
+          "points": 0.01
+        }
+      ],
+      "visible_seconds": 16.2,
+      "passes_received": 1,
+      "ball_losses": 0,
+      "saves": 0,
+      "is_goalkeeper": false
+    },
+    {
+      "stable_id": 26,
+      "team_id": "team_b",
+      "goals": 0,
+      "shots": 0,
+      "shots_on_target": 0,
+      "shot_accuracy": null,
+      "shot_conversion_rate": null,
+      "successful_passes": 0,
+      "pass_accuracy": null,
+      "interceptions": 0,
+      "ball_recoveries": 0,
+      "ball_possession_time_seconds": 0.0333,
+      "rating": 6.0,
+      "rating_confidence": "low",
+      "rating_breakdown": [
+        {
+          "key": "on_ball",
+          "label": "Time on the ball",
+          "count": 0.0,
+          "points": 0.0
+        }
+      ],
+      "visible_seconds": 14.2,
+      "passes_received": 0,
+      "ball_losses": 0,
+      "saves": 0,
+      "is_goalkeeper": false
+    }
+  ],
+  "player_of_the_match": 17,
+  "known_limitations": [
+    "stable_id is estimated by matching appearance, jersey numbers and movement across tracker gaps; it is not a shirt number, and same-kit players with no readable number can still be confused.",
+    "Teams come from kit colour groups, not official team sheets; goalkeepers are recognised by staying near a goal and the referee is excluded.",
+    "Pass accuracy is null: completed passes exist, but attempted-pass is not a defensible MVP definition.",
+    "Goals are found by detecting the goal frame and net in the video; shots toward a goal that is off screen are not counted.",
+    "A goal is counted when the ball is seen going into the net; missed shots/goals are expected when the ball is hidden.",
+    "Interceptions and recoveries are post-process labels, not broadcast events; they are the least reliable stat (stoppages and identity mix-ups can create false ones).",
+    "Possession % is each team's share of confirmed team possession and sums to 100%. Loose/unknown time is excluded from that split."
+  ]
 }

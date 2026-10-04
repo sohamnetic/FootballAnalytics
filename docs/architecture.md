@@ -329,3 +329,12 @@ Vercel (site) + Render free (API) + Backblaze B2 or any S3-compatible bucket (fi
 - `app/kaggle_launcher.py`: pushes a private script notebook (GPU + internet) that clones the repo at `RENDER_GIT_COMMIT` and runs `scripts/cloud/worker.py --setup`.
 - `app/pipeline_runner.py`: runs `run_mvp` and maps its output to progress; shared by the local runner and the worker.
 - Checked on this machine: `tests/test_cloud_jobs.py` (start/requeue logic with a fake Kaggle), the whole upload â†’ worker â†’ results â†’ playback â†’ delete flow against local storage and against a moto S3 server standing in for the bucket, and the browser upload (CORS preflight, part PUTs, ETags) against moto. Not checked yet: a real Kaggle run (package install on Kaggle's image, T4 speed).
+
+## Player ratings and names (2026-10-04)
+
+- `scripts/analytics/player_rating.py`, called from `build_match_stats`: a 0-10 rating per player from detected actions only (no running yet). Base 6.0; goals, shots and keeper saves add fixed points (`RATING_EVENT_POINTS`); passes, passes received, interceptions, recoveries, time on the ball and ball losses are scaled per 10 minutes on screen plus `RATING_SHRINK_MIN` (`RATING_RATE_POINTS`, `RATING_SCALE`). Weights are in `config/config.py`.
+- Screen time comes from the coordinates CSV; under `RATING_MIN_VISIBLE_S` (2 min) the rating is marked low confidence and can't be player of the match. Saves need the new `stopped_by_stable_id` column in the shots CSV and a goalkeeper flag from the teams CSV.
+- Each player gets `rating`, `rating_confidence`, `rating_breakdown` (rating points per action, adds up to the rating), `visible_seconds`, `passes_received`, `ball_losses`, `saves`, `is_goalkeeper`; the payload gets `player_of_the_match`.
+- Checked on the 5-min match and the 10:00-15:00 window: median 6.4-6.7, best 7.4-7.5, lowest 5.3-5.7. Ratings lean on interceptions and ball losses, so they inherit how reliable those are.
+- Player names: `PUT /api/matches/{id}/player-names` stores `player_names` on the match record; the dashboard shows them everywhere and edits them in the player panel.
+- Matches analysed before this have no ratings (cloud results don't keep the CSVs); analyse them again.
