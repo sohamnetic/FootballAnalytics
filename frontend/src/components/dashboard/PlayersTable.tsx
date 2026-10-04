@@ -55,32 +55,66 @@ export function PlayersTable({ players, onSelect }: { players: PlayerStats[]; on
     </th>
   );
 
+  const teamFilter = (
+    <div className="flex w-fit rounded-lg bg-white/[0.05] p-0.5 text-[12px]" role="group" aria-label="Filter by team">
+      {(["all", "team_a", "team_b"] as Filter[]).map((id) => (
+        <button
+          key={id}
+          type="button"
+          aria-pressed={filter === id}
+          onClick={() => setFilter(id)}
+          className={cn(
+            "max-w-28 cursor-pointer truncate rounded-md px-3 py-1.5 transition-colors",
+            filter === id ? "bg-white/10 text-white" : "text-zinc-400 hover:text-white",
+          )}
+        >
+          {id === "all" ? "All" : teamLabel(id, names)}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <Card>
       <CardHeader
         icon={<Users />}
         title="Players"
-        description={`${onTeam.length} players identified. Click a player for details, or a column to sort.`}
-        action={
-          <div className="flex rounded-lg bg-white/[0.05] p-0.5 text-[12px]" role="group" aria-label="Filter by team">
-            {(["all", "team_a", "team_b"] as Filter[]).map((id) => (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={filter === id}
-                onClick={() => setFilter(id)}
+        description={`${onTeam.length} players identified. Pick a player to see their rating breakdown.`}
+        action={<div className="hidden md:block">{teamFilter}</div>}
+      />
+      <div className="mt-4 px-5 md:hidden">{teamFilter}</div>
+
+      {/* phones: one card per player instead of the wide table */}
+      <ul className="mt-3 divide-y divide-white/[0.05] md:hidden">
+        {rows.map((p) => (
+          <li key={p.stable_id}>
+            <button
+              type="button"
+              onClick={() => onSelect?.(p)}
+              className="flex w-full cursor-pointer items-center gap-3 px-5 py-3 text-left active:bg-white/[0.04]"
+            >
+              <span
                 className={cn(
-                  "max-w-28 cursor-pointer truncate rounded-md px-3 py-1.5 transition-colors",
-                  filter === id ? "bg-white/10 text-white" : "text-zinc-400 hover:text-white",
+                  "grid size-9 shrink-0 place-items-center rounded-full font-mono text-[12px] font-semibold ring-1",
+                  p.team_id === "team_a" ? "bg-team-a/15 text-team-a ring-team-a/30" : "bg-team-b/15 text-team-b ring-team-b/30",
                 )}
               >
-                {id === "all" ? "All" : teamLabel(id, names)}
-              </button>
-            ))}
-          </div>
-        }
-      />
-      <div className="mt-4 overflow-x-auto">
+                {p.stable_id}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium text-white">{playerLabel(p.stable_id, playerNames)}</span>
+                <span className="block truncate text-[12px] text-zinc-500">
+                  {teamLabel(p.team_id, names)} · {p.successful_passes} {p.successful_passes === 1 ? "pass" : "passes"} ·{" "}
+                  {p.interceptions} int · {p.shots ?? 0} {p.shots === 1 ? "shot" : "shots"}
+                </span>
+              </span>
+              {rated ? <RatingBadge rating={p.rating} low={p.rating_confidence === "low"} /> : null}
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-4 hidden overflow-x-auto md:block">
         <table className="w-full min-w-[860px] text-sm">
           <thead className="border-y border-white/[0.06] bg-white/[0.02] text-[12px]">
             <tr>

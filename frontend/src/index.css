@@ -64,6 +64,10 @@
 
   body {
     @apply min-h-dvh bg-ink-950 font-sans text-zinc-100 selection:bg-pitch-400/30 selection:text-white;
+    /* feel like an app on phones: no grey flash on tap, no font boosting */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
 
   :focus-visible {

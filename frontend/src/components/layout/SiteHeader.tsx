@@ -7,7 +7,7 @@ import { cn } from "../../lib/cn";
 import { Button } from "../ui/Button";
 import { BrandMark } from "./BrandMark";
 
-function initials(name: string) {
+export function initials(name: string) {
   const parts = name.trim().split(/[\s@._-]+/).filter(Boolean);
   return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "U";
 }
@@ -46,7 +46,7 @@ export function SiteHeader() {
   return (
     <header
       className={cn(
-        "sticky top-0 z-40 transition-all duration-300",
+        "sticky top-0 z-40 pt-[env(safe-area-inset-top)] transition-all duration-300",
         scrolled ? "border-b border-white/[0.06] bg-ink-950/75 backdrop-blur-xl" : "border-b border-transparent",
       )}
     >
@@ -112,7 +112,8 @@ export function SiteHeader() {
 
         <Dialog.Root open={menuOpen} onOpenChange={setMenuOpen}>
           <Dialog.Trigger asChild>
-            <Button variant="ghost" size="icon" className="md:hidden" aria-label="Open menu">
+            {/* signed in on a phone, the bottom tab bar is the menu */}
+            <Button variant="ghost" size="icon" className={cn("md:hidden", user && "hidden")} aria-label="Open menu">
               <Menu />
             </Button>
           </Dialog.Trigger>

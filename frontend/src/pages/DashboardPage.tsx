@@ -15,11 +15,21 @@ import { PageShell } from "../components/layout/PageShell";
 import { Alert } from "../components/ui/Alert";
 import { Button } from "../components/ui/Button";
 import { PlayerNamesContext, type PlayerNames } from "../lib/playerNames";
+import { cn } from "../lib/cn";
 import { TeamNamesContext } from "../lib/teamNames";
 import type { MatchStats, PlayerStats } from "../types/matchStats";
 
+// on phones the dashboard is split into tabs instead of one very long page
+type Tab = "summary" | "players" | "video";
+const TABS: [Tab, string][] = [
+  ["summary", "Summary"],
+  ["players", "Players"],
+  ["video", "Video"],
+];
+
 export function DashboardPage() {
   const { matchId } = useParams();
+  const [tab, setTab] = useState<Tab>("summary");
   const [stats, setStats] = useState<MatchStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playerNames, setPlayerNames] = useState<PlayerNames>({});
@@ -81,6 +91,9 @@ export function DashboardPage() {
     team_b: stats.match.team_b_name || "Team B",
   };
   const best = stats.players.find((p) => p.stable_id === stats.player_of_the_match);
+  // only the chosen tab on phones, everything from md up
+  const on = (t: Tab, display: "block" | "grid" = "block") =>
+    cn(tab !== t && (display === "grid" ? "hidden md:grid" : "hidden md:block"));
 
   return (
     <TeamNamesContext.Provider value={names}>
@@ -96,17 +109,50 @@ export function DashboardPage() {
             </span>
           </nav>
 
-          <div className="space-y-4">
-            <ScoreHero stats={stats} />
+          <div
+            role="tablist"
+            aria-label="Dashboard sections"
+            className="sticky top-[calc(4rem+env(safe-area-inset-top))] z-30 -mx-4 mb-4 flex gap-1 bg-ink-950/85 px-4 py-2 backdrop-blur-xl md:hidden"
+          >
+            {TABS.map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                onClick={() => {
+                  setTab(id);
+                  window.scrollTo({ top: 0 });
+                }}
+                className={cn(
+                  "flex-1 cursor-pointer rounded-lg py-2 text-[13px] font-medium transition-colors",
+                  tab === id ? "bg-white/10 text-white" : "text-zinc-400 active:text-white",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
-            <div className="grid gap-4 lg:grid-cols-3">
-              <div className="lg:col-span-2">{matchId ? <VideoCard matchId={matchId} kitColors={stats.match.kit_colors} /> : null}</div>
-              <PossessionCard stats={stats} />
+          <div className="space-y-4">
+            <div className={on("summary")}>
+              <ScoreHero stats={stats} />
             </div>
 
-            <EventTiles summary={stats.event_summary} />
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div className={cn("lg:col-span-2", on("video"))}>
+                {matchId ? <VideoCard matchId={matchId} kitColors={stats.match.kit_colors} /> : null}
+              </div>
+              <div className={on("summary")}>
+                <PossessionCard stats={stats} />
+              </div>
+            </div>
 
-            <div className="grid gap-4 lg:grid-cols-5">
+            <div className={on("summary")}>
+              <EventTiles summary={stats.event_summary} />
+            </div>
+
+            <div className={cn("grid gap-4 lg:grid-cols-5", on("summary", "grid"))}>
               <div className="lg:col-span-2">
                 <TeamComparison a={stats.teams.team_a} b={stats.teams.team_b} />
               </div>
@@ -116,9 +162,13 @@ export function DashboardPage() {
               </div>
             </div>
 
-            <PlayersTable players={stats.players} onSelect={setSelected} />
+            <div className={on("players")}>
+              <PlayersTable players={stats.players} onSelect={setSelected} />
+            </div>
 
-            <TimelineCard events={stats.events} />
+            <div className={on("summary")}>
+              <TimelineCard events={stats.events} />
+            </div>
           </div>
           <PlayerPanel player={selected} onClose={() => setSelected(null)} />
         </PageShell>

@@ -3,7 +3,7 @@ import { useId, useState, type ComponentProps, type ReactNode } from "react";
 import { cn } from "../../lib/cn";
 
 const inputBase =
-  "h-11 w-full rounded-xl border border-white/[0.08] bg-ink-900/70 px-3.5 text-[14px] text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.03)] transition-colors outline-none placeholder:text-zinc-500 hover:border-white/15 focus:border-pitch-400/60 focus:ring-4 focus:ring-pitch-400/10 disabled:opacity-60 read-only:text-zinc-400";
+  "h-11 w-full rounded-xl border border-white/[0.08] bg-ink-900/70 px-3.5 text-base text-white md:text-[14px] shadow-[inset_0_1px_0_rgb(255_255_255/0.03)] transition-colors outline-none placeholder:text-zinc-500 hover:border-white/15 focus:border-pitch-400/60 focus:ring-4 focus:ring-pitch-400/10 disabled:opacity-60 read-only:text-zinc-400";
 
 type FieldProps = ComponentProps<"input"> & {
   label: string;

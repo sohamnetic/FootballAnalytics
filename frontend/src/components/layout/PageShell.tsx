@@ -1,6 +1,8 @@
 import { motion } from "motion/react";
 import type { ReactNode } from "react";
+import { useAuth } from "../../auth/AuthContext";
 import { cn } from "../../lib/cn";
+import { MobileTabBar } from "./MobileTabBar";
 import { SiteFooter } from "./SiteFooter";
 import { SiteHeader } from "./SiteHeader";
 
@@ -15,8 +17,15 @@ export function PageShell({
   footer?: boolean;
   className?: string;
 }) {
+  const { user } = useAuth();
   return (
-    <div className="relative isolate flex min-h-dvh flex-col overflow-x-clip">
+    <div
+      className={cn(
+        "relative isolate flex min-h-dvh flex-col overflow-x-clip",
+        // room for the phone tab bar
+        user && "pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0",
+      )}
+    >
       <div aria-hidden="true" className="app-backdrop pointer-events-none fixed inset-0 -z-10" />
       <div aria-hidden="true" className="grid-lines pointer-events-none absolute inset-x-0 top-0 -z-10 h-[40rem]" />
       <SiteHeader />
@@ -33,7 +42,12 @@ export function PageShell({
       >
         {children}
       </motion.main>
-      {footer ? <SiteFooter /> : null}
+      {footer ? (
+        <div className={cn(user && "hidden md:block")}>
+          <SiteFooter />
+        </div>
+      ) : null}
+      <MobileTabBar />
     </div>
   );
 }

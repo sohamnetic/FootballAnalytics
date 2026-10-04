@@ -1,0 +1,22 @@
+{
+  "name": "TactiVision",
+  "short_name": "TactiVision",
+  "description": "Football match footage into player tracking, possession, shots and player ratings.",
+  "id": "/",
+  "start_url": "/matches",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#050907",
+  "theme_color": "#050907",
+  "categories": ["sports", "utilities"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "New analysis", "url": "/upload", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "My matches", "url": "/matches", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

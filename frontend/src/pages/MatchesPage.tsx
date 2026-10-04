@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { deleteMatch, listMatches, type MatchRecord } from "../api/getMatchStats";
+import { InstallCard } from "../components/layout/InstallCard";
 import { PageHeading, PageShell } from "../components/layout/PageShell";
 import { Alert } from "../components/ui/Alert";
 import { Badge } from "../components/ui/Badge";
@@ -85,13 +86,16 @@ export function MatchesPage() {
         title="Matches"
         description={rows && rows.length ? `${rows.length} match${rows.length === 1 ? "" : "es"} uploaded` : undefined}
         actions={
-          <Button asChild>
+          // phones use the + in the tab bar
+          <Button asChild className="hidden md:inline-flex">
             <Link to="/upload">
               <Plus /> New analysis
             </Link>
           </Button>
         }
       />
+
+      <InstallCard />
 
       {error ? <Alert tone="error" className="mb-6">{error}</Alert> : null}
 
@@ -104,7 +108,7 @@ export function MatchesPage() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search teams or files"
             aria-label="Search matches"
-            className="h-10 w-full rounded-xl border border-white/[0.08] bg-white/[0.03] pr-3 pl-10 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-pitch-400/50 focus:ring-4 focus:ring-pitch-400/10"
+            className="h-10 w-full rounded-xl border border-white/[0.08] bg-white/[0.03] pr-3 pl-10 text-base text-white md:text-sm outline-none placeholder:text-zinc-500 focus:border-pitch-400/50 focus:ring-4 focus:ring-pitch-400/10"
           />
         </div>
       ) : null}

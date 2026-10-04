@@ -49,6 +49,8 @@ export default function App() {
         <Toaster
           theme="dark"
           position="bottom-right"
+          // above the phone tab bar
+          mobileOffset={{ bottom: "calc(5rem + env(safe-area-inset-bottom))" }}
           toastOptions={{
             style: {
               background: "#0e1713",

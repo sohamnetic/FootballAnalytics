@@ -15,10 +15,12 @@ export function PlayerPanel({ player, onClose }: { player: PlayerStats | null; o
     <Dialog.Root open={player !== null} onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
-        <Dialog.Content className="glass fixed top-1/2 left-1/2 z-50 max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl bg-ink-900/95 p-6">
+        {/* a bottom sheet on phones, a centred dialog from md up */}
+        <Dialog.Content className="glass fixed inset-x-0 bottom-0 z-50 max-h-[88dvh] overflow-y-auto rounded-t-3xl bg-ink-900/95 px-5 pt-3 pb-[calc(1.5rem+env(safe-area-inset-bottom))] md:inset-x-auto md:top-1/2 md:bottom-auto md:left-1/2 md:max-h-[calc(100vh-2rem)] md:w-[calc(100vw-2rem)] md:max-w-lg md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-2xl md:p-6">
+          <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/15 md:hidden" />
           {player ? <PlayerDetails player={player} /> : null}
           <Dialog.Close asChild>
-            <Button variant="ghost" size="icon" aria-label="Close" className="absolute top-4 right-4">
+            <Button variant="ghost" size="icon" aria-label="Close" className="absolute top-5 right-4 md:top-4">
               <X />
             </Button>
           </Dialog.Close>
@@ -32,7 +34,8 @@ function PlayerDetails({ player: p }: { player: PlayerStats }) {
   const teams = useTeamNames();
   const { names } = usePlayerNames();
   const low = p.rating_confidence === "low";
-  const breakdown = p.rating_breakdown ?? [];
+  // lines that didn't move the rating (e.g. 0.4 s on the ball) are just noise
+  const breakdown = (p.rating_breakdown ?? []).filter((b) => Math.abs(b.points) >= 0.01);
   const biggest = Math.max(...breakdown.map((b) => Math.abs(b.points)), 0.01);
 
   const facts: [string, string | number | null | undefined][] = [
@@ -174,7 +177,7 @@ function NameEditor({ stableId }: { stableId: number }) {
         onChange={(e) => setValue(e.target.value)}
         placeholder="Player name"
         aria-label="Player name"
-        className="h-9 min-w-0 flex-1 rounded-lg border border-white/[0.08] bg-ink-900/70 px-3 text-sm text-white outline-none placeholder:text-zinc-500 focus:border-pitch-400/60"
+        className="h-9 min-w-0 flex-1 rounded-lg border border-white/[0.08] bg-ink-900/70 px-3 text-base text-white outline-none md:text-sm placeholder:text-zinc-500 focus:border-pitch-400/60"
       />
       <Button type="submit" size="sm" loading={busy} className="h-9">
         <Check /> Save
